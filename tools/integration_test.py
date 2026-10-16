@@ -23,7 +23,7 @@ from app import native
 from app import config as config_module
 from app.config import Config
 
-# 自检会产生“热键被占用”等噪音日志，写到临时文件，避免污染用户日志
+# 自检启动的应用实例也会写日志，写到临时文件，避免污染用户日志
 config_module.LOG_PATH = os.path.join(tempfile.gettempdir(), "trans-integration.log")
 
 SAMPLE = (
@@ -75,13 +75,8 @@ def main() -> int:
         app._toggle_enabled()
         print(f"切换回原状态 = {bool(app.config.get('trigger', 'enabled', True)) == enabled_now}")
 
-        if native.clipboard_available():
-            native.clipboard_set_text(SAMPLE)
-            app._translate_clipboard()
-        else:
-            # 锁屏等状态下剪贴板不可用，直接驱动“翻译 → 弹窗”这一段
-            print("剪贴板当前不可用，跳过取词环节，直接驱动翻译链路")
-            app._start_translation(SAMPLE, (200, 200))
+        # 取词依赖鼠标事件，自动化里无法合成，这里直接驱动“翻译 → 弹窗”这一段
+        app._start_translation(SAMPLE, (200, 200))
 
         deadline = time.time() + 45
         while time.time() < deadline:

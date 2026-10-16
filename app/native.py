@@ -1,4 +1,4 @@
-"""Win32 原生能力封装：隐藏窗口与消息泵、托盘图标、全局热键、鼠标钩子、
+"""Win32 原生能力封装：隐藏窗口与消息泵、托盘图标、鼠标钩子、
 剪贴板读写与快照、按键模拟、窗口样式调整、DPAPI 加解密。
 
 全部通过 ctypes 直接调用系统 API，不依赖第三方库。
@@ -41,7 +41,6 @@ WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONUP = 0x0205
-WM_HOTKEY = 0x0312
 WM_APP = 0x8000
 
 PM_REMOVE = 0x0001
@@ -90,12 +89,6 @@ SM_CYSMICON = 50
 WH_MOUSE_LL = 14
 HC_ACTION = 0
 LLMHF_INJECTED = 0x00000001
-
-MOD_ALT = 0x0001
-MOD_CONTROL = 0x0002
-MOD_SHIFT = 0x0004
-MOD_WIN = 0x0008
-MOD_NOREPEAT = 0x4000
 
 CF_TEXT = 1
 CF_OEMTEXT = 7
@@ -269,8 +262,6 @@ _SIG = {
     "DispatchMessageW": (LRESULT, [POINTER(MSG)]),
     "PostMessageW": (wt.BOOL, [HWND, wt.UINT, wt.WPARAM, wt.LPARAM]),
     "RegisterWindowMessageW": (wt.UINT, [wt.LPCWSTR]),
-    "RegisterHotKey": (wt.BOOL, [HWND, ctypes.c_int, wt.UINT, wt.UINT]),
-    "UnregisterHotKey": (wt.BOOL, [HWND, ctypes.c_int]),
     "SendInput": (wt.UINT, [wt.UINT, POINTER(INPUT), ctypes.c_int]),
     "SetWindowsHookExW": (HANDLE, [ctypes.c_int, HOOKPROC, HINSTANCE, wt.DWORD]),
     "UnhookWindowsHookEx": (wt.BOOL, [HANDLE]),
@@ -374,8 +365,6 @@ _translate_message = _bind("TranslateMessage", user32)
 _dispatch_message = _bind("DispatchMessageW", user32)
 _post_message = _bind("PostMessageW", user32)
 _register_window_message = _bind("RegisterWindowMessageW", user32)
-_register_hotkey = _bind("RegisterHotKey", user32)
-_unregister_hotkey = _bind("UnregisterHotKey", user32)
 _send_input = _bind("SendInput", user32)
 _set_windows_hook = _bind("SetWindowsHookExW", user32)
 _unhook_windows_hook = _bind("UnhookWindowsHookEx", user32)
@@ -668,7 +657,7 @@ def destroy_icon(handle: int) -> None:
 
 
 class NativeWindow:
-    """不可见的顶层窗口，用于接收托盘、热键、自定义注册消息，并按时泵消息。"""
+    """不可见的顶层窗口，用于接收托盘与自定义注册消息，并按时泵消息。"""
 
     def __init__(self, class_name: str = "TransHiddenWnd", title: str = "Trans"):
         self.class_name = class_name
@@ -833,76 +822,6 @@ class TrayIcon:
         data.uVersion = 10000
         data.dwInfoFlags = NIIF_INFO
         _shell_notify_icon(NIM_MODIFY, byref(data))
-
-# ----------------------------------------------------------------- 全局热键
-
-HOTKEY_ID_DEFAULT = 0x5452
-
-_KEY_NAMES = {chr(code): code for code in range(0x30, 0x3A)}  # 0-9
-_KEY_NAMES.update({chr(code): code for code in range(0x41, 0x5B)})  # A-Z
-_KEY_NAMES.update({f"F{i}": 0x6F + i for i in range(1, 13)})
-_KEY_NAMES.update({"TAB": 0x09, "SPACE": 0x20, "ENTER": 0x0D, "ESC": 0x1B})
-_KEY_NAMES.update({"`": 0xC0, "-": 0xBD, "=": 0xBB, "[": 0xDB, "]": 0xDD, "\\": 0xDC,
-                   ";": 0xBA, "'": 0xDE, ",": 0xBC, ".": 0xBE, "/": 0xBF})
-
-
-def parse_hotkey(text: str) -> Optional[Tuple[int, int]]:
-    """解析 "Ctrl+Alt+T" 形式的热键，返回 (修饰键, 虚拟键码)。"""
-    if not text or not text.strip():
-        return None
-    mods = 0
-    key = None
-    for raw in text.replace("＋", "+").split("+"):
-        token = raw.strip()
-        if not token:
-            continue
-        upper = token.upper()
-        if upper in ("CTRL", "CONTROL"):
-            mods |= MOD_CONTROL
-        elif upper in ("ALT", "MENU"):
-            mods |= MOD_ALT
-        elif upper == "SHIFT":
-            mods |= MOD_SHIFT
-        elif upper in ("WIN", "WINDOWS", "SUPER", "META"):
-            mods |= MOD_WIN
-        elif upper in _KEY_NAMES:
-            if key is not None:
-                return None
-            key = _KEY_NAMES[upper]
-        elif len(token) == 1:
-            code = ctypes.windll.user32.VkKeyScanW(token)
-            if code == -1:
-                return None
-            key = code & 0xFF
-        else:
-            return None
-    if key is None or mods == 0:
-        return None
-    return mods | MOD_NOREPEAT, key
-
-
-class HotkeyManager:
-    def __init__(self, hwnd: int, hotkey_id: int = HOTKEY_ID_DEFAULT) -> None:
-        self.hwnd = hwnd
-        self.hotkey_id = hotkey_id
-        self.current: Optional[str] = None
-
-    def register(self, text: str) -> Tuple[bool, str]:
-        parsed = parse_hotkey(text)
-        if not parsed:
-            return False, f"热键格式无效：{text}"
-        self.unregister()
-        mods, vk = parsed
-        if not _register_hotkey(self.hwnd, self.hotkey_id, mods, vk):
-            return False, f"热键被占用或注册失败：{text}"
-        self.current = text
-        return True, ""
-
-    def unregister(self) -> None:
-        if self.current:
-            _unregister_hotkey(self.hwnd, self.hotkey_id)
-            self.current = None
-
 
 # ----------------------------------------------------------------- 鼠标钩子
 

@@ -45,7 +45,6 @@ DEFAULTS: Dict[str, Any] = {
         "enabled": True,
         # True：仅按住 Ctrl 划选才翻译；False：任意划选都翻译
         "require_ctrl": True,
-        "hotkey": "Ctrl+Alt+T",
         "min_drag_px": 4,
         "copy_delay_ms": 130,
         # auto：剪贴板只含纯文本时才还原；always：总是还原文本；never：不还原

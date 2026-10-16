@@ -61,14 +61,6 @@ def test_structs() -> None:
     )
 
 
-def test_hotkey() -> None:
-    print("热键解析")
-    check("Ctrl+Alt+T", native.parse_hotkey("Ctrl+Alt+T") == (native.MOD_CONTROL | native.MOD_ALT | native.MOD_NOREPEAT, 0x54))
-    check("Ctrl+Shift+F2", native.parse_hotkey("ctrl + shift + f2") == (native.MOD_CONTROL | native.MOD_SHIFT | native.MOD_NOREPEAT, 0x71))
-    check("缺少修饰键应失败", native.parse_hotkey("T") is None)
-    check("非法键名应失败", native.parse_hotkey("Ctrl+Abc") is None)
-
-
 def test_language() -> None:
     print("语言检测与规则")
     check("中文", detect_language("这是一段中文文本") == "zh")
@@ -147,7 +139,8 @@ def test_config() -> None:
     with tempfile.TemporaryDirectory() as folder:
         path = os.path.join(folder, "config.json")
         config = Config.load(path)
-        check("默认热键", config.get("trigger", "hotkey") == "Ctrl+Alt+T")
+        check("默认需要 Ctrl 划选", config.get("trigger", "require_ctrl") is True)
+        check("配置里不再有快捷键项", "hotkey" not in config.section("trigger"))
         config.set("model", "api_key", "sk-test-123456")
         config.set("model", "model", "deepseek-chat")
         config.replace_rules([{"source": "zh", "target": "ja"}])
@@ -157,7 +150,10 @@ def test_config() -> None:
         reopened = Config.load(path)
         check("密钥可解密还原", reopened.get("model", "api_key") == "sk-test-123456", str(reopened.get("model", "api_key")))
         check("规则持久化", reopened.rules == [{"source": "zh", "target": "ja"}])
-        check("非法 JSON 回退默认", Config.load(os.path.join(folder, "none.json")).get("trigger", "hotkey") == "Ctrl+Alt+T")
+        check(
+            "非法 JSON 回退默认",
+            Config.load(os.path.join(folder, "none.json")).get("trigger", "enabled") is True,
+        )
 
     check("DPAPI 往返", native.dpapi_decrypt(native.dpapi_encrypt("测试密钥") or b"") == "测试密钥")
 
@@ -393,7 +389,6 @@ def main() -> int:
         return 1
     for test in (
         test_structs,
-        test_hotkey,
         test_language,
         test_translator,
         test_config,

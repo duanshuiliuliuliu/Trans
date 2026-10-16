@@ -120,7 +120,6 @@ class App:
         self.native_window = native.NativeWindow()
         self.native_window.create()
         self.native_window.add_handler(WM_TRAY, self._on_tray_message)
-        self.native_window.add_handler(native.WM_HOTKEY, self._on_hotkey)
         self._taskbar_created = self.native_window.register_message("TaskbarCreated")
         self.native_window.add_handler(self._taskbar_created, self._on_taskbar_created)
         self._show_settings_message = self.native_window.register_message(SHOW_SETTINGS_MESSAGE)
@@ -136,9 +135,6 @@ class App:
         if not self._install_tray():
             self._log("托盘图标注册失败，稍后重试")
             self.root.after(1500, self._install_tray)
-
-        self.hotkeys = native.HotkeyManager(self.native_window.hwnd)
-        self._register_hotkey()
 
         self.popup = Popup(
             self.root,
@@ -226,7 +222,7 @@ class App:
     def _show_first_run_hint(self) -> None:
         self.tray.show_balloon(
             "Trans 已启动",
-            "按住 Ctrl 用鼠标划选文字即可翻译；也可按 Ctrl+Alt+T 翻译当前选中内容。",
+            "按住 Ctrl 用鼠标划选文字即可翻译。",
         )
         self.config.set("ui", "hint_shown", True)
         self.config.save()
@@ -238,7 +234,7 @@ class App:
             self._log("鼠标钩子已安装")
         else:
             Config.log("ERROR 鼠标钩子安装失败，划选取词不可用")
-            self.tray.show_balloon("Trans", "鼠标钩子安装失败，请改用 Ctrl+Alt+T 取词。")
+            self.tray.show_balloon("Trans", "鼠标钩子安装失败，划选取词不可用。")
 
     def _tray_tooltip(self) -> str:
         state = "已启用" if self.config.get("trigger", "enabled", True) else "已禁用"
@@ -252,7 +248,6 @@ class App:
         self._stopping = True
         try:
             self.hook.stop()
-            self.hotkeys.unregister()
             self.tray.remove()
             self.popup.hide()
             self.settings.destroy()
@@ -376,21 +371,8 @@ class App:
         self._settings_requested = True
         return 0
 
-    # ------------------------------------------------------------ 热键
-    def _register_hotkey(self) -> None:
-        hotkey = self.config.get("trigger", "hotkey", "Ctrl+Alt+T")
-        ok, message = self.hotkeys.register(hotkey)
-        if not ok:
-            Config.log(f"ERROR 热键注册失败：{message}")
-
-    def _on_hotkey(self, _wparam: int, _lparam: int) -> Optional[int]:
-        self._translate_current_selection(*native.get_cursor_pos())
-        return 0
-
     # ------------------------------------------------------------ 配置应用
     def _apply_config(self) -> None:
-        self.hotkeys.unregister()
-        self._register_hotkey()
         enabled = bool(self.config.get("trigger", "enabled", True))
         self._mark_action("更新托盘图标与提示")
         self.tray.update(
@@ -478,20 +460,6 @@ class App:
             return
         self._log(f"取到文本 {len(value)} 字")
         self._start_translation(value, self._pending_anchor)
-
-    def _translate_clipboard(self) -> None:
-        anchor = native.get_cursor_pos()
-        self._mark_action("读剪贴板内容")
-        self._run_async(
-            lambda: (native.clipboard_get_text() or "").strip(),
-            lambda text: self._after_clipboard_read(str(text or "").strip(), anchor),
-        )
-
-    def _after_clipboard_read(self, text: str, anchor: Tuple[int, int]) -> None:
-        if not text:
-            self.popup.show_error("剪贴板里没有可翻译的文本。", *anchor)
-            return
-        self._start_translation(text, anchor)
 
     def _copy_text_async(self, text: str, done: Any) -> None:
         self._run_async(lambda: native.clipboard_set_text(text), done)
