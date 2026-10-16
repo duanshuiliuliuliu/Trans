@@ -26,16 +26,21 @@ pythonw Trans.pyw
 
 需要 Python 3.10 或更高版本（开发验证环境为 3.14.3），且 `tkinter` 可用。无需 `pip install` 任何包。
 
+程序是**单实例**的：无论源码方式还是打包后的 exe，重复双击都不会起第二个进程——第二次点击会把已在运行的实例的设置窗口调到前台。源码方式与 exe 共用同一把互斥体，因此两种方式同时只能跑一个。
+
 打包成免安装 exe（可选，需要先 `pip install pyinstaller`）：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
-# 产物：dist\Trans\Trans.exe
+```bat
+python -m pip install pyinstaller
+build.bat
+rem 产物：dist\Trans\Trans.exe（整个 dist\Trans 目录一起拷走即可）
 ```
+
+`build.bat` 也可以直接双击运行。首次打包约 10 秒，产物约 26 MB（含 Python 运行时与 Tcl/Tk），打包后不需要目标机器安装 Python。脚本刻意写成纯 ASCII：`cmd.exe` 按控制台代码页（中文 Windows 是 GBK）读取 bat，非 ASCII 文字会变乱码甚至导致解析失败。
 
 ## 首次配置
 
-托盘图标右键 →「设置…」（或双击托盘图标），在「大模型」页填写：
+托盘图标右键 →「设置」（或双击托盘图标），在「大模型」页填写：
 
 | 项 | 说明 |
 | --- | --- |
@@ -113,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 - 位置：`%APPDATA%\Trans\config.json`（「通用」页有「打开配置目录」按钮）
 - API Key 以 DPAPI 加密存储，仅当前 Windows 用户可解密；手工填写明文 key 也能识别
-- 日志：`%APPDATA%\Trans\trans.log`，默认只记录错误；勾选「记录调试日志」后记录全部过程，超过 512 KB 自动轮转
+- 日志：`%APPDATA%\Trans\trans.log`，超过 512 KB 自动轮转；崩溃栈单独写在同目录的 `crash.log`
 - 保存后立即生效，无需重启
 
 ## 开机自启
@@ -149,7 +154,7 @@ tools/make_icons.py    生成图标（需 Pillow）
 tools/screenshot_ui.py 界面截图（需 Pillow，开发用）
 tools/hook_probe.py    鼠标钩子探针（排障用）
 tools/integration_test.py 端到端集成自检（真实调用接口）
-build.ps1              PyInstaller 打包脚本
+build.bat              PyInstaller 打包脚本（纯 ASCII，双击即可）
 ```
 
 ## 开发自检
@@ -171,7 +176,7 @@ python tools/bench_latency.py              # 延迟基准：对比推理开关�
 
 `tools/screenshot_ui.py` 可把设置窗口与弹窗渲染成 PNG，便于核对排版（需 Pillow）。
 
-取词没反应时，先在「通用」页勾选「记录调试日志」，再复现一次，然后查看 `%APPDATA%\Trans\trans.log`：能看到「检测到划选」说明钩子正常，只卡在后续环节；完全没有记录则用下面的探针确认鼠标事件是否被系统送到程序。
+取词没反应时，先把配置文件里的 `debug` 改成 `true` 并重启，再复现一次，然后查看 `%APPDATA%\Trans\trans.log`：能看到「检测到划选」说明钩子正常，只卡在后续环节；完全没有记录则用下面的探针确认鼠标事件是否被系统送到程序。
 
 程序会把异常、硬崩溃的调用栈和主线程卡顿（`WARN 主线程卡住 …（最近动作：…）`）一并写进同一个日志文件，排查卡顿或闪退时先看它。
 

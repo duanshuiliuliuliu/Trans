@@ -652,15 +652,17 @@ class App:
 
 
 def main() -> int:
-    _install_crash_log()
-    _check_previous_run()
     native.enable_dpi_awareness()
+    # 单实例检查必须放在最前面：后续的日志初始化与「上次是否正常退出」检测
+    # 只有真正的那个实例才该做，否则重复双击会被记成一次“异常退出”。
     _handle, already_running = native.create_singleton_mutex(MUTEX_NAME)
     if already_running:
-        # 已有实例：广播消息让它打开设置窗口，本进程直接退出
+        # 已有实例：广播消息让它打开设置窗口，本进程直接退出，不写任何日志
         message = native._register_window_message(SHOW_SETTINGS_MESSAGE)
         native.broadcast_message(message)
         return 0
+    _install_crash_log()
+    _check_previous_run()
     App().run()
     return 0
 
