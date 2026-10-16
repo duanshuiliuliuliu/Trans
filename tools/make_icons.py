@@ -57,10 +57,9 @@ def render(size: int, background: tuple[int, int, int], glyph: str, glyph_color:
 
 
 def build(name: str, background: tuple[int, int, int]) -> None:
-    # 16/20/24 像素下“译”字数密度过高会糊成一团，改用简化的字母标记
-    frames = [
-        render(size, background, "译" if size >= 32 else "T", "#FFFFFF") for size in SIZES
-    ]
+    # 所有尺寸统一用字母 T：同一份 .ico 里混用两种字形时，Windows 会按显示场景
+    # 挑不同尺寸（托盘 16px、资源管理器 32px 以上），看起来就像图标在变。
+    frames = [render(size, background, "T", "#FFFFFF") for size in SIZES]
     target = os.path.join(ASSETS, name)
     # append_images 提供各尺寸的原图，bitmap_format 使用传统 DIB，兼容性最好
     frames[-1].save(
