@@ -32,11 +32,21 @@ pythonw Trans.pyw
 
 ```bat
 python -m pip install pyinstaller
-build.bat
-rem 产物：dist\Trans\Trans.exe（整个 dist\Trans 目录一起拷走即可）
+build.bat            rem 默认单文件，产物 dist\Trans.exe
+build.bat onedir     rem 目录形式，产物 dist\Trans\Trans.exe（启动更快，但整个目录都要拷走）
 ```
 
-`build.bat` 也可以直接双击运行。首次打包约 10 秒，产物约 26 MB（含 Python 运行时与 Tcl/Tk），打包后不需要目标机器安装 Python。脚本刻意写成纯 ASCII：`cmd.exe` 按控制台代码页（中文 Windows 是 GBK）读取 bat，非 ASCII 文字会变乱码甚至导致解析失败。
+`build.bat` 可以直接双击运行（双击等于默认的单文件模式），首次打包约 10 秒。产物是**单文件** `dist\Trans.exe`（约 12 MB）：拷到任何 Windows 10/11 机器上双击就能跑，**不需要目标机器安装 Python**——Python 运行时、Tcl/Tk 和图标资源都打包在里面，启动时自解压到 `%TEMP%`，实测首启动约 1.8 秒。
+
+几点需要知道：
+
+| 事项 | 说明 |
+| --- | --- |
+| 配置与 API Key | 不在 exe 里，存在 `%APPDATA%\Trans\config.json`（Key 用 DPAPI 加密，只能当前 Windows 用户解密）。新机器首次运行会自动建目录，在设置里填一次 Key |
+| 代码签名 | 未签名，从网络拷过去首次运行可能被 SmartScreen 拦一下（“更多信息 → 仍要运行”） |
+| 打包模式差异 | 单文件启动慢约 1 秒（每次自解压）；`onedir` 启动更快但必须整个目录一起拷，单独拷 exe 无法运行 |
+| 脚本编码 | `build.bat` 刻意只用 ASCII：`cmd.exe` 按控制台代码页（中文 Windows 是 GBK）读取 bat，非 ASCII 文字会变乱码甚至导致解析失败 |
+| 重新打包 | 打包前要先从托盘菜单退出正在运行的 exe，否则脚本会拦住你并提示（运行中的 exe 会锁住 dist） |
 
 ## 首次配置
 
@@ -154,7 +164,7 @@ tools/make_icons.py    生成图标（需 Pillow）
 tools/screenshot_ui.py 界面截图（需 Pillow，开发用）
 tools/hook_probe.py    鼠标钩子探针（排障用）
 tools/integration_test.py 端到端集成自检（真实调用接口）
-build.bat              PyInstaller 打包脚本（纯 ASCII，双击即可）
+build.bat              PyInstaller 打包脚本（默认单文件，纯 ASCII，双击即可）
 ```
 
 ## 开发自检
