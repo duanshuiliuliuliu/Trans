@@ -1,0 +1,5 @@
+# 运行时依赖：无。程序只使用 Python 标准库（ctypes / tkinter / urllib）。
+#
+# 开发与打包用途（可选，需手动安装）：
+#   pip install pyinstaller    # 打包成免安装 exe
+#   pip install pillow         # 仅 tools/make_icons.py、tools/screenshot_ui.py 需要

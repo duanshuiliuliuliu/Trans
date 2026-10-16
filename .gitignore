@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 打包产物
+build/
+dist/
+*.spec
+
+# 日志与本地配置（API Key 存在 %APPDATA%\Trans\config.json，不应进仓库）
+*.log
+*.local.json
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
