@@ -19,7 +19,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app import APP_NAME, __version__, native, resource_dir
 from app import config as config_module
 from app.config import Config, language_label
-from app.lang import pick_target
+from app.lang import (
+    build_routing_instruction,
+    detected_label,
+    needs_model_routing,
+    pick_target,
+)
 from app.translator import translate
 from app.ui_popup import Popup
 from app.ui_settings import SettingsWindow
@@ -48,21 +53,23 @@ def tray_menu_items(enabled: bool) -> list:
     """托盘右键菜单：只有启用/禁用、设置、退出三项，且都不显示对号。"""
     return [
         (MENU_TOGGLE, "禁用" if enabled else "启用", False, True),
-        (MENU_SETTINGS, "设置…", False, True),
+        (MENU_SETTINGS, "设置", False, True),
         (MENU_QUIT, "退出", False, True),
     ]
 
 
 def _install_crash_log() -> None:
-    """把硬崩溃（访问违例、栈溢出等）的栈回溯写进日志文件。
+    """把硬崩溃（访问违例、栈溢出等）的栈回溯写进专用文件。
 
-    pythonw 没有控制台，崩溃现场默认什么都留不下，这里用 faulthandler 兜住。
+    pythonw 没有控制台，崩溃现场默认什么都留不下。写到独立文件是为了避免主日志
+    轮转（重命名）之后句柄失效——那样崩溃栈就丢了。
     """
     try:
-        log_path = config_module.LOG_PATH
+        log_path = config_module.CRASH_LOG_PATH
         os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
         handle = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
         faulthandler.enable(file=handle, all_threads=True)
+        Config.log("崩溃捕获已启用（crash.log）")
     except Exception:
         pass
 
@@ -96,8 +103,12 @@ class App:
         self._dismissed_generation = 0
         self._stopping = False
         self._menu_open = False
+        self._menu_requested = False
+        self._settings_requested = False
         self._last_tick = time.time()
         self._last_action = "启动"
+        self._action_started = time.time()
+        self._main_thread_id = threading.get_ident()
         self._pending_anchor: Tuple[int, int] = (0, 0)
 
         self.root = tk.Tk()
@@ -115,11 +126,12 @@ class App:
         self._show_settings_message = self.native_window.register_message(SHOW_SETTINGS_MESSAGE)
         self.native_window.add_handler(self._show_settings_message, self._on_show_settings_message)
 
+        # 图标要与配置里持久化的启用状态一致：上次是禁用状态时启动就该是灰的
         self.tray = native.TrayIcon(
             self.native_window.hwnd,
             WM_TRAY,
             self._tray_tooltip(),
-            ICON_ON,
+            ICON_ON if self.config.get("trigger", "enabled", True) else ICON_OFF,
         )
         if not self._install_tray():
             self._log("托盘图标注册失败，稍后重试")
@@ -143,8 +155,7 @@ class App:
             on_click=self._on_mouse_click,
             require_ctrl=bool(self.config.get("trigger", "require_ctrl", True)),
         )
-        if self.config.get("trigger", "mouse_selection", True):
-            self._start_hook()
+        self._start_hook()
         if not self.config.get("ui", "hint_shown", False):
             self.root.after(800, self._show_first_run_hint)
 
@@ -172,6 +183,7 @@ class App:
     def _mark_action(self, action: str) -> None:
         """记录最近一步动作，卡顿时看门狗会把它写进日志。"""
         self._last_action = action
+        self._action_started = time.time()
 
     def _start_watchdog(self) -> None:
         self._last_tick = time.time()
@@ -186,8 +198,23 @@ class App:
                 continue
             stalled = time.time() - self._last_tick
             if stalled > 2.0:
-                Config.log(f"WARN 主线程卡住 {stalled:.1f}s（最近动作：{self._last_action}）")
+                held = time.time() - getattr(self, "_action_started", self._last_tick)
+                Config.log(
+                    f"WARN 主线程卡住 {stalled:.1f}s"
+                    f"（最近动作：{self._last_action}，该动作已持续 {held:.1f}s）\n"
+                    + self._main_thread_stack()
+                )
                 self._last_tick = time.time()
+
+    def _main_thread_stack(self) -> str:
+        """抓一份主线程的调用栈——卡死时它能直接指出阻塞在哪一行。"""
+        try:
+            frame = sys._current_frames().get(self._main_thread_id)
+            if frame is None:
+                return "  （拿不到主线程栈）"
+            return "".join("  " + line for line in traceback.format_stack(frame))
+        except Exception as exc:
+            return f"  （抓栈失败：{exc}）"
 
     def _on_tk_exception(self, exc_type, value, tb) -> None:
         try:
@@ -243,6 +270,7 @@ class App:
     def _tick(self) -> None:
         self._last_tick = time.time()
         self.native_window.pump()
+        self._drain_tray_requests()
         self._drain_callbacks()
         self._drain_selections()
         self._drain_clicks()
@@ -288,11 +316,24 @@ class App:
 
     # ------------------------------------------------------------ 托盘
     def _on_tray_message(self, wparam: int, lparam: int) -> Optional[int]:
+        """托盘回调只做标记。
+
+        这个函数是被 DispatchMessage 调用的（在消息泵内部），在这里弹原生菜单
+        等于在窗口过程里再开一个模态循环，容易和消息队列互相卡住。
+        """
         if lparam == native.WM_LBUTTONDBLCLK:
-            self.settings.show()
+            self._settings_requested = True
         elif lparam == native.WM_RBUTTONUP:
-            self._show_menu()
+            self._menu_requested = True
         return 0
+
+    def _drain_tray_requests(self) -> None:
+        if self._settings_requested:
+            self._settings_requested = False
+            self.settings.show()
+        if self._menu_requested:
+            self._menu_requested = False
+            self._show_menu()
 
     def _show_menu(self) -> None:
         enabled = bool(self.config.get("trigger", "enabled", True))
@@ -313,17 +354,26 @@ class App:
     def _toggle_enabled(self) -> None:
         enabled = not bool(self.config.get("trigger", "enabled", True))
         self.config.set("trigger", "enabled", enabled)
+        self._mark_action("保存配置")
         self.config.save()
-        self.tray.set_icon(ICON_ON if enabled else ICON_OFF)
-        self.tray.set_tooltip(self._tray_tooltip())
-        self._log(f"切换启用状态：{enabled}")
+        self._mark_action("更新托盘图标与提示")
+        self.tray.update(
+            icon_path=ICON_ON if enabled else ICON_OFF,
+            tooltip=self._tray_tooltip(),
+        )
+        self.settings.sync_enabled(enabled)
+        self._log(
+            f"切换启用状态：{enabled}（托盘图标切到{'彩色' if enabled else '置灰'}，"
+            f"鼠标取词{'生效' if enabled else '停用'}）"
+        )
 
     def _on_taskbar_created(self, _wparam: int, _lparam: int) -> Optional[int]:
         self._install_tray()
         return 0
 
     def _on_show_settings_message(self, _wparam: int, _lparam: int) -> Optional[int]:
-        self.settings.show()
+        # 同样只做标记，实际打开放到主循环里
+        self._settings_requested = True
         return 0
 
     # ------------------------------------------------------------ 热键
@@ -341,24 +391,23 @@ class App:
     def _apply_config(self) -> None:
         self.hotkeys.unregister()
         self._register_hotkey()
-        self.tray.set_icon(ICON_ON if self.config.get("trigger", "enabled", True) else ICON_OFF)
-        self.tray.set_tooltip(self._tray_tooltip())
+        enabled = bool(self.config.get("trigger", "enabled", True))
+        self._mark_action("更新托盘图标与提示")
+        self.tray.update(
+            icon_path=ICON_ON if enabled else ICON_OFF,
+            tooltip=self._tray_tooltip(),
+        )
         self.hook.min_drag_px = int(self.config.get("trigger", "min_drag_px", 4) or 4)
         self.hook.require_ctrl = bool(self.config.get("trigger", "require_ctrl", True))
-        if self.config.get("trigger", "mouse_selection", True):
-            self._start_hook()
-        else:
-            self.hook.stop()
-        self._log("配置已更新")
+        self._start_hook()
+        self._log(f"配置已更新（启用取词翻译={enabled}）")
 
     # ------------------------------------------------------------ 取词
     def _on_selection(self, x: int, y: int, kind: str = "drag") -> None:
         """鼠标钩子回调：只入队，不做耗时操作。"""
         if not self.config.get("trigger", "enabled", True):
             return
-        if not self.config.get("trigger", "mouse_selection", True):
-            return
-        self._log(f"检测到{'双击选词' if kind == 'click' else '划选'} ({x},{y})")
+        self._log(f"检测到划选 ({x},{y})")
         self._selections.put((x, y, kind))
 
     def _drain_selections(self) -> None:
@@ -474,7 +523,14 @@ class App:
             text = text[:max_chars]
             truncated = True
 
-        detected, target, _rule = pick_target(text, self.config.rules, fallback="zh")
+        detected, target, _rule, confident = pick_target(
+            text, self.config.rules, fallback="zh"
+        )
+        # 本地判不出来的语种 + 规则表里确实有拉丁语系语种时，才把规则表交给模型路由
+        routing = None
+        if not confident and needs_model_routing(self.config.rules):
+            routing = build_routing_instruction(self.config.rules, target)
+        routed = routing is not None
         model_config = dict(self.config.section("model"))
         if not (model_config.get("api_key") or "").strip():
             self.popup.show_error("尚未配置 API Key，请在设置里填写。", *anchor)
@@ -484,11 +540,17 @@ class App:
         generation = self._generation
         self._busy = True
         self._mark_action("翻译：请求接口")
-        self._log(f"开始翻译：{len(text)} 字 → {target}")
-        self.popup.show_pending(anchor[0], anchor[1], f"{language_label(detected) or '自动识别'} → {language_label(target) or target}")
+        self._log(
+            f"开始翻译：{len(text)} 字，源语言识别={detected}"
+            f"{'（交给模型按规则表路由）' if routed else ''} → {target}"
+        )
+        self.popup.show_pending(anchor[0], anchor[1], self._pending_note(detected, target, routed))
 
         def worker() -> None:
-            ok, result, elapsed = translate(text, target, model_config)
+            usage: Dict[str, Any] = {}
+            ok, result, elapsed = translate(
+                text, target, model_config, usage=usage, routing=routing
+            )
             self._results.put(
                 (
                     generation,
@@ -496,9 +558,11 @@ class App:
                         "ok": ok,
                         "result": result,
                         "elapsed": elapsed,
+                        "usage": usage,
                         "source": text,
                         "target": target,
                         "detected": detected,
+                        "routed": routed,
                         "truncated": truncated,
                         "anchor": anchor,
                     },
@@ -506,6 +570,12 @@ class App:
             )
 
         threading.Thread(target=worker, name="trans-worker", daemon=True).start()
+
+    @staticmethod
+    def _pending_note(detected: str, target: str, routed: bool) -> str:
+        if routed:
+            return f"{detected_label(detected)} → 按规则表"
+        return f"{detected_label(detected)} → {language_label(target) or target}"
 
     def _drain_results(self) -> None:
         while True:
@@ -528,10 +598,20 @@ class App:
             self._log_error(f"翻译失败：{payload['result']}")
             self.popup.show_error(str(payload["result"]), *anchor)
             return
-        self._log(f"翻译完成，耗时 {payload['elapsed']:.1f}s")
-        meta_parts = [
-            f"{language_label(payload['detected']) or '自动识别'} → {language_label(payload['target']) or payload['target']}"
-        ]
+        usage = payload.get("usage") or {}
+        details = usage.get("completion_tokens_details") or {}
+        self._log(
+            f"翻译完成，耗时 {payload['elapsed']:.1f}s"
+            f"（输出 {usage.get('completion_tokens', '-')} token，"
+            f"其中推理 {details.get('reasoning_tokens', 0)}）"
+        )
+        if payload.get("routed"):
+            meta_parts = [f"{detected_label(payload['detected'])} → 按规则表"]
+        else:
+            meta_parts = [
+                f"{detected_label(payload['detected'])} → "
+                f"{language_label(payload['target']) or payload['target']}"
+            ]
         model_name = str(self.config.get("model", "model", "") or "")
         if model_name:
             meta_parts.append(model_name)

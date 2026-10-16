@@ -19,9 +19,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import native
 from app import config as config_module
+from app import lang as lang_module
 from app.config import Config
 from app.lang import detect_language, pick_target
-from app.translator import build_endpoint, build_messages
+from app.translator import (
+    _rejected_thinking_param,
+    build_endpoint,
+    build_messages,
+    build_payload,
+)
 
 PASSED = 0
 FAILED: list[str] = []
@@ -68,8 +74,22 @@ def test_language() -> None:
     check("中文", detect_language("这是一段中文文本") == "zh")
     check("日语含假名", detect_language("これはテストです") == "ja")
     check("韩语", detect_language("안녕하세요 반갑습니다") == "ko")
-    check("英语", detect_language("Hello world, this is a test.") == "en")
     check("俄语", detect_language("Привет мир") == "ru")
+    check("乌克兰语", detect_language("Привіт світе, як справи") == "uk")
+    check("希腊语", detect_language("Καλημέρα κόσμε") == "el")
+    check("希伯来语", detect_language("שלום עולם") == "he")
+    check("阿拉伯语", detect_language("مرحبا بالعالم") == "ar")
+    check("波斯语", detect_language("چگونه حال شما است") == "fa")
+    check("印地语", detect_language("नमस्ते दुनिया") == "hi")
+    check("泰语", detect_language("สวัสดีชาวโลก") == "th")
+    check("越南语", detect_language("Xin chào thế giới, tôi đang kiểm tra") == "vi")
+    check("土耳其语", detect_language("Merhaba dünya, bu bir deneme yazısıdır") == "tr")
+    check("波兰语", detect_language("Witaj świecie, to jest test") == "pl")
+    check("捷克语", detect_language("Ahoj světe, toto je test") == "cs")
+    check("冰岛语", detect_language("Halló heimur, þetta er próf") == "is")
+    check("葡萄牙语", detect_language("O sistema deve degradar-se com elegância e não deve falhar.") == "pt")
+    check("拉丁字母判不出具体语种", detect_language("Hello world, this is a test.") == "latin")
+    check("法语同样归入 latin", detect_language("Le système doit se dégrader proprement.") == "latin")
     check("纯数字无法判断", detect_language("12345") == "unknown")
 
     rules = [
@@ -81,6 +101,20 @@ def test_language() -> None:
     check("英语译中", pick_target("hello", rules)[1] == "zh")
     check("兜底规则命中", pick_target("12345", rules)[1] == "zh")
     check("无匹配时回退", pick_target("hello", [{"source": "zh", "target": "en"}])[1] == "zh")
+    check("中文识别结果确信", pick_target("你好世界", rules)[3] is True)
+    check("拉丁字母不确信", pick_target("hello", rules)[3] is False)
+
+    fr_rules = [{"source": "fr", "target": "de"}, {"source": "auto", "target": "zh"}]
+    check("法语规则本地命不中", pick_target("Le système doit se dégrader.", fr_rules)[1] == "zh")
+    check("含拉丁语系规则时需要路由", lang_module.needs_model_routing(fr_rules) is True)
+    check("只有中日韩规则时不需要路由", lang_module.needs_model_routing(rules) is False)
+    routing = lang_module.build_routing_instruction(fr_rules, "zh")
+    check("路由指令用条件句", routing is not None and "如果原文是法语，翻译成德语" in routing, str(routing))
+    check("路由指令含兜底", routing is not None and "其它情况" in routing, str(routing))
+    check("单一规则不生成路由指令", lang_module.build_routing_instruction([{"source": "zh", "target": "en"}], "zh") is None)
+    routed = build_messages("bonjour", "zh", "请翻译成{target}。", routing)
+    check("路由时不出现固定目标语言", "请翻译成下面规则指定的语言。" == routed[0]["content"].split("\n")[0], routed[0]["content"][:40])
+    check("规则表附在系统提示里", "如果原文是法语，翻译成德语" in routed[0]["content"])
 
 
 def test_translator() -> None:
@@ -91,6 +125,21 @@ def test_translator() -> None:
     messages = build_messages("hello", "en", "翻译成{target}")
     check("提示词替换", messages[0]["content"] == "翻译成英语", messages[0]["content"])
     check("用户消息", messages[1] == {"role": "user", "content": "hello"})
+
+    base = {"model": "deepseek-flash", "temperature": 0.3, "system_prompt": "翻译成{target}"}
+    payload_off = build_payload("hello", "en", dict(base, thinking=False))
+    check("默认关闭推理", payload_off["thinking"] == {"type": "disabled"}, str(payload_off.get("thinking")))
+    payload_on = build_payload("hello", "en", dict(base, thinking=True))
+    check("开启推理时不带该参数", "thinking" not in payload_on, str(payload_on))
+    check("温度写入请求体", payload_off["temperature"] == 0.3)
+    check(
+        "接口拒绝 thinking 时可识别",
+        _rejected_thinking_param('接口返回 400：Unsupported parameter: thinking'),
+    )
+    check(
+        "其它 400 不误判",
+        not _rejected_thinking_param("接口返回 400：Authentication Fails"),
+    )
 
 
 def test_config() -> None:
@@ -274,12 +323,12 @@ def test_tray_menu() -> None:
     check("菜单只有三项", len(enabled_items) == 3, str(enabled_items))
     check(
         "启用状态下列表为 禁用/设置/退出",
-        [label for _id, label, _checked, _ok in enabled_items] == ["禁用", "设置…", "退出"],
+        [label for _id, label, _checked, _ok in enabled_items] == ["禁用", "设置", "退出"],
         str(enabled_items),
     )
     check(
         "禁用状态下列表为 启用/设置/退出",
-        [label for _id, label, _checked, _ok in disabled_items] == ["启用", "设置…", "退出"],
+        [label for _id, label, _checked, _ok in disabled_items] == ["启用", "设置", "退出"],
         str(disabled_items),
     )
     check(

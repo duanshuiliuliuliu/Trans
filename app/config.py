@@ -14,6 +14,7 @@ from . import APP_NAME, native
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 LOG_PATH = os.path.join(CONFIG_DIR, "trans.log")
+CRASH_LOG_PATH = os.path.join(CONFIG_DIR, "crash.log")
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一名专业翻译。请把用户提供的文本翻译成{target}。"
@@ -27,7 +28,9 @@ DEFAULTS: Dict[str, Any] = {
         "api_key": "",
         "api_key_encrypted": False,
         "model": "deepseek-flash",
-        "temperature": 1.3,
+        # 关闭“翻译前先推理”：实测可把单次翻译从 2.0~2.8s 压到 1.1~1.5s
+        "thinking": False,
+        "temperature": 0.3,
         "timeout": 20,
         "system_prompt": DEFAULT_SYSTEM_PROMPT,
     },
@@ -40,8 +43,7 @@ DEFAULTS: Dict[str, Any] = {
     },
     "trigger": {
         "enabled": True,
-        "mouse_selection": True,
-        # True：按住 Ctrl 划选/双击才翻译；False：任意选中都翻译
+        # True：仅按住 Ctrl 划选才翻译；False：任意划选都翻译
         "require_ctrl": True,
         "hotkey": "Ctrl+Alt+T",
         "min_drag_px": 4,
@@ -58,20 +60,55 @@ DEFAULTS: Dict[str, Any] = {
     "debug": False,
 }
 
+# 主流亚欧语种。目标语言侧全部可用；源语言侧能否自动命中见 README「语言识别能力」
 LANGUAGE_LABELS = {
     "auto": "自动识别",
+    # 东亚 / 东南亚
     "zh": "中文",
-    "en": "英语",
+    "zh-Hant": "繁体中文",
     "ja": "日语",
     "ko": "韩语",
-    "fr": "法语",
-    "de": "德语",
-    "es": "西班牙语",
-    "ru": "俄语",
+    "vi": "越南语",
+    "th": "泰语",
+    "id": "印尼语",
+    "ms": "马来语",
+    # 南亚 / 中东
+    "hi": "印地语",
+    "bn": "孟加拉语",
+    "ta": "泰米尔语",
     "ar": "阿拉伯语",
+    "fa": "波斯语",
+    "he": "希伯来语",
+    "tr": "土耳其语",
+    # 欧洲
+    "en": "英语",
+    "de": "德语",
+    "fr": "法语",
+    "es": "西班牙语",
     "pt": "葡萄牙语",
     "it": "意大利语",
-    "th": "泰语",
+    "nl": "荷兰语",
+    "ca": "加泰罗尼亚语",
+    "sv": "瑞典语",
+    "no": "挪威语",
+    "da": "丹麦语",
+    "fi": "芬兰语",
+    "is": "冰岛语",
+    "pl": "波兰语",
+    "cs": "捷克语",
+    "sk": "斯洛伐克语",
+    "hu": "匈牙利语",
+    "ro": "罗马尼亚语",
+    "bg": "保加利亚语",
+    "el": "希腊语",
+    "ru": "俄语",
+    "uk": "乌克兰语",
+    "sr": "塞尔维亚语",
+    "hr": "克罗地亚语",
+    "sl": "斯洛文尼亚语",
+    "lt": "立陶宛语",
+    "lv": "拉脱维亚语",
+    "et": "爱沙尼亚语",
 }
 
 

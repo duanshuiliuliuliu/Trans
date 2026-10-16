@@ -12,14 +12,8 @@ from .config import DEFAULT_SYSTEM_PROMPT, Config, language_label
 from .translator import PRESET_MODELS
 
 SOURCE_CHOICES = [
-    ("auto", "自动识别"),
-    ("zh", "中文/日文汉字"),
-    ("ja", "日语"),
-    ("ko", "韩语"),
-    ("en", "英语等拉丁文字"),
-    ("ru", "俄语"),
-    ("ar", "阿拉伯语"),
-    ("th", "泰语"),
+    (code, label)
+    for code, label in config_module.LANGUAGE_LABELS.items()
 ]
 
 TARGET_CHOICES = [
@@ -27,13 +21,6 @@ TARGET_CHOICES = [
     for code, label in config_module.LANGUAGE_LABELS.items()
     if code != "auto"
 ]
-
-RESTORE_CHOICES = [
-    ("auto", "智能（剪贴板为纯文本时才还原）"),
-    ("always", "总是还原原剪贴板文本"),
-    ("never", "不还原（保留复制的文本）"),
-]
-
 
 def _code_of(label: str) -> Optional[str]:
     for code, text in config_module.LANGUAGE_LABELS.items():
@@ -64,6 +51,7 @@ class RuleDialog:
             textvariable=self.source_var,
             state="readonly",
             width=26,
+            height=16,
             values=[label for _code, label in SOURCE_CHOICES],
         )
         source_box.grid(row=0, column=1, sticky="ew", pady=4, padx=(8, 0))
@@ -76,20 +64,13 @@ class RuleDialog:
             body,
             textvariable=self.target_var,
             width=26,
+            height=16,
             values=[label for _code, label in TARGET_CHOICES],
         )
         target_box.grid(row=1, column=1, sticky="ew", pady=4, padx=(8, 0))
 
-        ttk.Label(
-            body,
-            text="提示：目标语言可自定义输入，例如“文言文”“繁体中文”。\n"
-            "规则自上而下匹配，第一条命中的生效。",
-            foreground="#6B7280",
-            justify="left",
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 4))
-
         buttons = ttk.Frame(body)
-        buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        buttons.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="确定", command=self._confirm).pack(side="right")
         ttk.Button(buttons, text="取消", command=self.window.destroy).pack(
             side="right", padx=(0, 8)
@@ -126,6 +107,18 @@ class SettingsWindow:
         self._rules: List[Dict[str, Any]] = [dict(item) for item in config.rules]
 
     # --- 生命周期 ---------------------------------------------------
+    def _sync_mode_state(self) -> None:
+        """总开关关闭时，两种取词方式不可选。"""
+        state = "normal" if self.var_enabled.get() else "disabled"
+        for radio in (self.mode_any, self.mode_ctrl):
+            radio.configure(state=state)
+
+    def sync_enabled(self, enabled: bool) -> None:
+        """托盘菜单切换启用状态后，同步到已打开的设置窗口。"""
+        if self.window is not None and self.window.winfo_exists():
+            self.var_enabled.set(bool(enabled))
+            self._sync_mode_state()
+
     def show(self) -> None:
         if self.window is not None and self.window.winfo_exists():
             self.window.deiconify()
@@ -143,7 +136,7 @@ class SettingsWindow:
         window = tk.Toplevel(self.root)
         self.window = window
         window.title("Trans 设置")
-        window.minsize(500, 450)
+        window.resizable(False, False)  # 固定大小，避免布局被拉花
         window.protocol("WM_DELETE_WINDOW", self._on_close)
 
         notebook = ttk.Notebook(window)
@@ -156,8 +149,9 @@ class SettingsWindow:
 
         self.var_base_url = tk.StringVar(value=model.get("base_url", ""))
         self.var_api_key = tk.StringVar(value=model.get("api_key", ""))
-        self.var_model = tk.StringVar(value=model.get("model", "deepseek-chat"))
-        self.var_temperature = tk.StringVar(value=str(model.get("temperature", 1.3)))
+        self.var_model = tk.StringVar(value=model.get("model", "deepseek-flash"))
+        self.var_temperature = tk.StringVar(value=str(model.get("temperature", 0.3)))
+        self.var_thinking = tk.BooleanVar(value=bool(model.get("thinking", False)))
         self.var_timeout = tk.StringVar(value=str(model.get("timeout", 20)))
 
         self._row(model_tab, 0, "接口地址", ttk.Entry(model_tab, textvariable=self.var_base_url))
@@ -180,9 +174,14 @@ class SettingsWindow:
         )
         self._row(model_tab, 2, "模型", model_box)
         self.model_box = model_box
+        ttk.Checkbutton(
+            model_tab,
+            text="翻译前先推理（质量略好，实测每次约慢 1 秒）",
+            variable=self.var_thinking,
+        ).grid(row=3, column=1, sticky="w", pady=(0, 2))
         self._row(
             model_tab,
-            3,
+            4,
             "温度",
             ttk.Spinbox(
                 model_tab,
@@ -196,7 +195,7 @@ class SettingsWindow:
         )
         self._row(
             model_tab,
-            4,
+            5,
             "超时（秒）",
             ttk.Spinbox(
                 model_tab,
@@ -210,12 +209,12 @@ class SettingsWindow:
         )
 
         ttk.Label(model_tab, text="翻译提示词").grid(
-            row=5, column=0, sticky="nw", pady=4, padx=(0, 8)
+            row=6, column=0, sticky="nw", pady=4, padx=(0, 8)
         )
         prompt_frame = ttk.Frame(model_tab)
-        prompt_frame.grid(row=5, column=1, sticky="nsew", pady=4)
+        prompt_frame.grid(row=6, column=1, sticky="nsew", pady=4)
         prompt_frame.columnconfigure(0, weight=1)
-        model_tab.rowconfigure(5, weight=1)
+        model_tab.rowconfigure(6, weight=1)
         self.prompt_text = tk.Text(
             prompt_frame, width=36, height=6, wrap="word", font=("Microsoft YaHei UI", 10)
         )
@@ -224,12 +223,6 @@ class SettingsWindow:
         prompt_scroll = ttk.Scrollbar(prompt_frame, command=self.prompt_text.yview)
         prompt_scroll.grid(row=0, column=1, sticky="ns")
         self.prompt_text.configure(yscrollcommand=prompt_scroll.set)
-        ttk.Label(
-            model_tab,
-            text="{target} 会被替换为目标语言名称。",
-            foreground="#6B7280",
-        ).grid(row=6, column=1, sticky="w")
-
         # ---------------- 规则 ----------------
         rules_tab = ttk.Frame(notebook, padding=12)
         notebook.add(rules_tab, text="翻译规则")
@@ -281,67 +274,35 @@ class SettingsWindow:
         general_tab.columnconfigure(1, weight=1)
 
         self.var_enabled = tk.BooleanVar(value=bool(trigger.get("enabled", True)))
-        self.var_mouse = tk.BooleanVar(value=bool(trigger.get("mouse_selection", True)))
-        self.var_hotkey = tk.StringVar(value=trigger.get("hotkey", "Ctrl+Alt+T"))
-        self.var_restore = tk.StringVar(
-            value=dict((code, text) for code, text in RESTORE_CHOICES).get(
-                str(trigger.get("restore_clipboard", "auto")), RESTORE_CHOICES[0][1]
-            )
+        self.var_mode = tk.StringVar(
+            value="ctrl" if bool(trigger.get("require_ctrl", True)) else "any"
         )
-        self.var_require_ctrl = tk.BooleanVar(
-            value=bool(trigger.get("require_ctrl", True))
-        )
-        self.var_min_drag = tk.StringVar(value=str(trigger.get("min_drag_px", 4)))
-        self.var_delay = tk.StringVar(value=str(trigger.get("copy_delay_ms", 130)))
         self.var_auto_close = tk.StringVar(value=str(ui.get("popup_auto_close", 8)))
         self.var_font_size = tk.StringVar(value=str(ui.get("font_size", 11)))
         self.var_show_source = tk.BooleanVar(value=bool(ui.get("show_source", True)))
-        self.var_debug = tk.BooleanVar(value=bool(self.config.data.get("debug", False)))
 
-        ttk.Checkbutton(general_tab, text="启用取词翻译", variable=self.var_enabled).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=4
-        )
         ttk.Checkbutton(
-            general_tab, text="鼠标划选后自动翻译", variable=self.var_mouse
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=4)
-        ttk.Checkbutton(
-            general_tab, text="仅按住 Ctrl 划选时翻译", variable=self.var_require_ctrl
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
-        self._row(
             general_tab,
-            3,
-            "取词快捷键",
-            ttk.Entry(general_tab, textvariable=self.var_hotkey, width=24),
+            text="启用取词翻译",
+            variable=self.var_enabled,
+            command=self._sync_mode_state,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(4, 6))
+        self.mode_any = ttk.Radiobutton(
+            general_tab, text="鼠标划选后自动翻译", value="any", variable=self.var_mode
         )
-        restore_box = ttk.Combobox(
-            general_tab,
-            textvariable=self.var_restore,
-            state="readonly",
-            values=[text for _code, text in RESTORE_CHOICES],
-            width=24,
+        self.mode_any.grid(row=1, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=3)
+        self.mode_ctrl = ttk.Radiobutton(
+            general_tab, text="仅按住 Ctrl 划选时翻译", value="ctrl", variable=self.var_mode
         )
-        self._row(general_tab, 4, "剪贴板还原", restore_box)
-        self._row(
-            general_tab,
-            5,
-            "最小划选距离（像素）",
-            ttk.Spinbox(
-                general_tab, textvariable=self.var_min_drag, from_=2, to=60, width=8
-            ),
-            sticky="w",
+        self.mode_ctrl.grid(row=2, column=0, columnspan=2, sticky="w", padx=(20, 0), pady=3)
+        self._sync_mode_state()
+
+        ttk.Checkbutton(general_tab, text="弹窗中显示原文", variable=self.var_show_source).grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(14, 4)
         )
         self._row(
             general_tab,
-            6,
-            "复制前延迟（毫秒）",
-            ttk.Spinbox(
-                general_tab, textvariable=self.var_delay, from_=0, to=1000, increment=10, width=8
-            ),
-            sticky="w",
-        )
-        self._row(
-            general_tab,
-            7,
+            4,
             "弹窗自动关闭（秒，0 不关）",
             ttk.Spinbox(
                 general_tab, textvariable=self.var_auto_close, from_=0, to=120, width=8
@@ -350,20 +311,14 @@ class SettingsWindow:
         )
         self._row(
             general_tab,
-            8,
+            5,
             "字号",
             ttk.Spinbox(general_tab, textvariable=self.var_font_size, from_=8, to=24, width=8),
             sticky="w",
         )
-        ttk.Checkbutton(
-            general_tab, text="弹窗中显示原文", variable=self.var_show_source
-        ).grid(row=9, column=1, sticky="w", pady=4)
-        ttk.Checkbutton(general_tab, text="记录调试日志", variable=self.var_debug).grid(
-            row=10, column=1, sticky="w", pady=4
-        )
 
         general_buttons = ttk.Frame(general_tab)
-        general_buttons.grid(row=11, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        general_buttons.grid(row=6, column=0, columnspan=2, sticky="w", pady=(14, 0))
         ttk.Button(general_buttons, text="打开配置目录", command=self._open_config_dir).pack(
             side="left"
         )
@@ -374,15 +329,18 @@ class SettingsWindow:
         # ---------------- 底部按钮 ----------------
         footer = ttk.Frame(window, padding=10)
         footer.pack(fill="x")
-        ttk.Label(
-            footer,
-            text="配置保存在 %APPDATA%\\Trans\\config.json",
-            foreground="#6B7280",
-        ).pack(side="left")
         ttk.Button(footer, text="关闭", command=self._on_close).pack(side="right")
         ttk.Button(footer, text="保存并应用", command=self._save).pack(
             side="right", padx=(0, 8)
         )
+
+        # 按使用频率排列页签：通用 / 翻译规则 / 大模型
+        tabs = [(general_tab, "通用"), (rules_tab, "翻译规则"), (model_tab, "大模型")]
+        for tab, _label in tabs:
+            notebook.forget(tab)
+        for tab, label in tabs:
+            notebook.add(tab, text=label)
+        notebook.select(general_tab)
 
         self._render_rules()
         self._center(window)
@@ -396,14 +354,15 @@ class SettingsWindow:
 
     @staticmethod
     def _center(window: tk.Toplevel) -> None:
+        """固定窗口尺寸并居中（尺寸取各页签的最大需求）。"""
         window.update_idletasks()
-        width = window.winfo_width() or 640
-        height = window.winfo_height() or 520
+        width = window.winfo_reqwidth()
+        height = window.winfo_reqheight()
         screen_width = window.winfo_screenwidth()
         screen_height = window.winfo_screenheight()
         x = max(0, (screen_width - width) // 2)
         y = max(0, (screen_height - height) // 3)
-        window.geometry(f"+{x}+{y}")
+        window.geometry(f"{width}x{height}+{x}+{y}")
 
     # --- 规则操作 ---------------------------------------------------
     def _render_rules(self) -> None:
@@ -459,8 +418,9 @@ class SettingsWindow:
         return {
             "base_url": self.var_base_url.get().strip(),
             "api_key": self.var_api_key.get().strip(),
-            "model": self.var_model.get().strip() or "deepseek-chat",
-            "temperature": self._to_float(self.var_temperature.get(), 1.3),
+            "model": self.var_model.get().strip() or "deepseek-flash",
+            "thinking": bool(self.var_thinking.get()),
+            "temperature": self._to_float(self.var_temperature.get(), 0.3),
             "timeout": self._to_float(self.var_timeout.get(), 20.0),
             "system_prompt": self.prompt_text.get("1.0", "end").strip() or DEFAULT_SYSTEM_PROMPT,
         }
@@ -480,7 +440,6 @@ class SettingsWindow:
             return default
 
     def _collect(self) -> Dict[str, Any]:
-        restore = _code_of(self.var_restore.get()) or "auto"
         return {
             "model": self._collect_model(),
             "rules": {
@@ -489,33 +448,17 @@ class SettingsWindow:
             },
             "trigger": {
                 "enabled": bool(self.var_enabled.get()),
-                "mouse_selection": bool(self.var_mouse.get()),
-                "require_ctrl": bool(self.var_require_ctrl.get()),
-                "hotkey": self.var_hotkey.get().strip() or "Ctrl+Alt+T",
-                "min_drag_px": max(2, self._to_int(self.var_min_drag.get(), 6)),
-                "copy_delay_ms": max(0, self._to_int(self.var_delay.get(), 130)),
-                "restore_clipboard": restore,
+                "require_ctrl": self.var_mode.get() == "ctrl",
             },
             "ui": {
                 "popup_auto_close": max(0, self._to_int(self.var_auto_close.get(), 8)),
                 "font_size": max(8, self._to_int(self.var_font_size.get(), 11)),
                 "show_source": bool(self.var_show_source.get()),
             },
-            "debug": bool(self.var_debug.get()),
         }
 
     def _save(self) -> bool:
-        from .native import parse_hotkey
-
         collected = self._collect()
-        hotkey = collected["trigger"]["hotkey"]
-        if not parse_hotkey(hotkey):
-            messagebox.showwarning(
-                "Trans 设置",
-                f"快捷键格式无效：{hotkey}\n示例：Ctrl+Alt+T、Ctrl+Shift+F2",
-                parent=self.window,
-            )
-            return False
         for section, values in collected.items():
             if isinstance(values, dict):
                 self.config.section(section).update(values)
@@ -571,4 +514,7 @@ class SettingsWindow:
                 return
             except OSError:
                 pass
+        if os.path.isfile(config_module.CRASH_LOG_PATH):
+            os.startfile(config_module.CRASH_LOG_PATH)  # type: ignore[attr-defined]
+            return
         messagebox.showinfo("Trans 设置", "暂无日志文件。")

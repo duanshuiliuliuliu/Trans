@@ -758,9 +758,13 @@ class TrayIcon:
         self.hicon = 0
         self._data = NOTIFYICONDATAW()
         self._data.cbSize = sizeof(NOTIFYICONDATAW)
+        self._icon_cache: Dict[str, int] = {}  # 路径 -> 已加载的图标句柄，避免反复读盘
 
     def add(self) -> bool:
-        self._load_hicon()
+        handle = self._icon_cache.get(self.icon_path) or load_icon(self.icon_path)
+        if handle:
+            self._icon_cache[self.icon_path] = handle
+            self.hicon = handle
         data = self._data
         data.hWnd = self.hwnd
         data.uID = self.icon_id
@@ -775,28 +779,48 @@ class TrayIcon:
         data.hWnd = self.hwnd
         data.uID = self.icon_id
         _shell_notify_icon(NIM_DELETE, byref(data))
+        for handle in self._icon_cache.values():
+            destroy_icon(handle)
+        self._icon_cache.clear()
         if self.hicon:
             destroy_icon(self.hicon)
             self.hicon = 0
 
-    def set_icon(self, icon_path: str) -> None:
-        self.icon_path = icon_path
-        self._load_hicon()
+    def update(self, icon_path: Optional[str] = None, tooltip: Optional[str] = None) -> None:
+        """一次调用同时更新图标与提示文字。
+
+        Shell_NotifyIcon 是同步调用，会等资源管理器响应；合并调用可以减少卡顿风险。
+        图标句柄按路径缓存，切换状态时不再重新读盘。
+        """
+        flags = 0
+        if icon_path and icon_path != self.icon_path:
+            handle = self._icon_cache.get(icon_path)
+            if not handle:
+                handle = load_icon(icon_path)
+                if handle:
+                    self._icon_cache[icon_path] = handle
+            if handle:
+                self.icon_path = icon_path
+                self.hicon = handle
+                flags |= NIF_ICON
+        if tooltip is not None and tooltip != self.tooltip:
+            self.tooltip = tooltip
+            flags |= NIF_TIP
+        if not flags:
+            return
         data = self._data
         data.hWnd = self.hwnd
         data.uID = self.icon_id
-        data.uFlags = NIF_ICON
+        data.uFlags = flags
         data.hIcon = self.hicon
+        data.szTip = self.tooltip[:127]
         _shell_notify_icon(NIM_MODIFY, byref(data))
 
+    def set_icon(self, icon_path: str) -> None:
+        self.update(icon_path=icon_path)
+
     def set_tooltip(self, tooltip: str) -> None:
-        self.tooltip = tooltip
-        data = self._data
-        data.hWnd = self.hwnd
-        data.uID = self.icon_id
-        data.uFlags = NIF_TIP
-        data.szTip = tooltip[:127]
-        _shell_notify_icon(NIM_MODIFY, byref(data))
+        self.update(tooltip=tooltip)
 
     def show_balloon(self, title: str, text: str) -> None:
         """弹出气泡提示（V2 结构的 NIF_INFO）。"""
@@ -809,15 +833,6 @@ class TrayIcon:
         data.uVersion = 10000
         data.dwInfoFlags = NIIF_INFO
         _shell_notify_icon(NIM_MODIFY, byref(data))
-
-    def _load_hicon(self) -> None:
-        new_icon = load_icon(self.icon_path)
-        if new_icon:
-            old = self.hicon
-            self.hicon = new_icon
-            if old:
-                destroy_icon(old)
-
 
 # ----------------------------------------------------------------- 全局热键
 

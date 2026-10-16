@@ -32,11 +32,10 @@ SAMPLE = (
 )
 
 
-def load_app_class():
+def load_entry_module():
     """Trans.pyw 不是常规 .py 后缀，用 SourceFileLoader 显式加载。"""
     loader = importlib.machinery.SourceFileLoader("trans_entry", os.path.join(ROOT, "Trans.pyw"))
-    module = loader.load_module()
-    return module.App
+    return loader.load_module()
 
 
 def collect_texts(widget: tk.Misc, found: list[str]) -> None:
@@ -57,9 +56,25 @@ def main() -> int:
     print(f"模型 = {config.get('model', 'model')}，接口 = {config.get('model', 'base_url')}")
     native.enable_dpi_awareness()
     clipboard_backup = native.clipboard_get_text()
-    app = load_app_class()()
+    module = load_entry_module()
+    app = module.App()
     try:
         app.root.after(40, app._tick)  # 替代 run()，让消息泵与结果回收跑起来
+
+        # 启用状态要在图标、托盘菜单、设置界面三处保持一致
+        def icon_matches(enabled: bool) -> bool:
+            want_off = app.tray.icon_path.endswith("icon_off.ico")
+            return want_off == (not enabled)
+
+        enabled_now = bool(config.get("trigger", "enabled", True))
+        print(f"启动图标与配置一致 = {icon_matches(enabled_now)}（启用={enabled_now}）")
+        app._toggle_enabled()
+        flipped = bool(app.config.get("trigger", "enabled", True))
+        menu_label = module.tray_menu_items(flipped)[0][1]
+        print(f"托盘切换后图标一致 = {icon_matches(flipped)}，菜单显示=「{menu_label}」")
+        app._toggle_enabled()
+        print(f"切换回原状态 = {bool(app.config.get('trigger', 'enabled', True)) == enabled_now}")
+
         if native.clipboard_available():
             native.clipboard_set_text(SAMPLE)
             app._translate_clipboard()

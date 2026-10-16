@@ -73,6 +73,28 @@ def capture(hwnd: int, path: str) -> None:
     print(f"已保存 {path} ({width}x{height})")
 
 
+def capture_screen(x: int, y: int, width: int, height: int, path: str) -> None:
+    """抓取屏幕上一块区域（用于核对托盘图标等系统绘制的内容）。"""
+    screen_dc = user32.GetDC(0)
+    mem_dc = gdi32.CreateCompatibleDC(screen_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(screen_dc, width, height)
+    gdi32.SelectObject(mem_dc, bitmap)
+    gdi32.BitBlt(mem_dc, 0, 0, width, height, screen_dc, int(x), int(y), 0x00CC0020)
+    info = BITMAPINFO()
+    info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+    info.bmiHeader.biWidth = width
+    info.bmiHeader.biHeight = -height
+    info.bmiHeader.biPlanes = 1
+    info.bmiHeader.biBitCount = 32
+    buffer = ctypes.create_string_buffer(width * height * 4)
+    gdi32.GetDIBits(mem_dc, bitmap, 0, height, buffer, byref(info), 0)
+    Image.frombuffer("RGBA", (width, height), buffer, "raw", "BGRA", 0, 1).convert("RGB").save(path)
+    gdi32.DeleteObject(bitmap)
+    gdi32.DeleteDC(mem_dc)
+    user32.ReleaseDC(0, screen_dc)
+    print(f"已保存 {path} ({width}x{height})")
+
+
 def settle(root: tk.Misc, rounds: int = 12) -> None:
     for _ in range(rounds):
         root.update()
@@ -95,10 +117,11 @@ def main() -> int:
         settings.show()
         settle(root)
         notebook = settings.window.nametowidget(settings.window.winfo_children()[0])
-        for index, name in enumerate(("settings-模型", "settings-规则", "settings-通用")):
-            notebook.select(index)
+        for index, tab in enumerate(notebook.tabs()):
+            notebook.select(tab)
             settle(root, 6)
-            capture(int(settings.window.wm_frame(), 16), os.path.join(out_dir, f"{name}.png"))
+            name = notebook.tab(tab, "text")
+            capture(int(settings.window.wm_frame(), 16), os.path.join(out_dir, f"settings-{name}.png"))
         settings.destroy()
 
         popup = Popup(root, config)
