@@ -33,10 +33,6 @@ gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 # ----------------------------------------------------------------- 常量
 
 WM_NULL = 0x0000
-WM_DESTROY = 0x0002
-WM_CLOSE = 0x0010
-WM_COMMAND = 0x0111
-WM_CONTEXTMENU = 0x007B
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
@@ -49,13 +45,11 @@ HWND_BROADCAST = 0xFFFF
 WS_POPUP = 0x80000000
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_TOPMOST = 0x00000008
 WS_EX_NOACTIVATE = 0x08000000
 
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOZORDER = 0x0004
-SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 
 CS_HREDRAW = 0x0002
@@ -64,7 +58,6 @@ IDC_ARROW = 32512
 
 MF_STRING = 0x0000
 MF_GRAYED = 0x0001
-MF_DISABLED = 0x0002
 MF_CHECKED = 0x0008
 MF_SEPARATOR = 0x0800
 
@@ -84,7 +77,6 @@ NIIF_INFO = 0x00000001
 IMAGE_ICON = 1
 LR_LOADFROMFILE = 0x0010
 SM_CXSMICON = 49
-SM_CYSMICON = 50
 
 WH_MOUSE_LL = 14
 HC_ACTION = 0
@@ -268,7 +260,6 @@ _SIG = {
     "CallNextHookEx": (LRESULT, [HANDLE, ctypes.c_int, wt.WPARAM, wt.LPARAM]),
     "GetCursorPos": (wt.BOOL, [POINTER(POINT)]),
     "WindowFromPoint": (HWND, [POINT]),
-    "GetForegroundWindow": (HWND, []),
     "GetWindowThreadProcessId": (wt.DWORD, [HWND, POINTER(wt.DWORD)]),
     "SetForegroundWindow": (wt.BOOL, [HWND]),
     "GetSystemMetrics": (ctypes.c_int, [ctypes.c_int]),
@@ -303,11 +294,6 @@ _SIG = {
     # gdi32
     "GetDeviceCaps": (ctypes.c_int, [HANDLE, ctypes.c_int]),
 }
-
-_LIB_OF = {
-    "Shell_NotifyIconW": shell32,
-}
-
 
 def _bind(func_name: str, lib) -> Callable:
     if func_name not in _SIG:
@@ -371,7 +357,6 @@ _unhook_windows_hook = _bind("UnhookWindowsHookEx", user32)
 _call_next_hook = _bind("CallNextHookEx", user32)
 _get_cursor_pos = _bind("GetCursorPos", user32)
 _window_from_point = _bind("WindowFromPoint", user32)
-_get_foreground_window = _bind("GetForegroundWindow", user32)
 _get_window_thread_process_id = _bind("GetWindowThreadProcessId", user32)
 _set_foreground_window = _bind("SetForegroundWindow", user32)
 _get_system_metrics = _bind("GetSystemMetrics", user32)
@@ -427,10 +412,7 @@ def enable_dpi_awareness() -> None:
 def system_dpi() -> int:
     """返回系统 DPI（96 为 100% 缩放）。"""
     try:
-        fn = user32.GetDpiForSystem
-        fn.restype = wt.UINT
-        fn.argtypes = []
-        dpi = fn()
+        dpi = _bind("GetDpiForSystem", user32)()
         if dpi:
             return int(dpi)
     except (AttributeError, OSError):
@@ -526,18 +508,23 @@ def _open_clipboard() -> bool:
     return False
 
 
+def _enum_formats_locked() -> List[int]:
+    """枚举剪贴板格式；调用前必须已经打开剪贴板。"""
+    formats: List[int] = []
+    fmt = 0
+    while True:
+        fmt = EnumClipboardFormats(fmt)
+        if not fmt:
+            break
+        formats.append(int(fmt))
+    return formats
+
+
 def clipboard_formats() -> List[int]:
     if not _open_clipboard():
         return []
     try:
-        formats: List[int] = []
-        fmt = 0
-        while True:
-            fmt = EnumClipboardFormats(fmt)
-            if not fmt:
-                break
-            formats.append(int(fmt))
-        return formats
+        return _enum_formats_locked()
     finally:
         CloseClipboard()
 
@@ -556,6 +543,30 @@ def clipboard_get_text() -> Optional[str]:
             return ctypes.c_wchar_p(ptr).value
         finally:
             _global_unlock(handle)
+    finally:
+        CloseClipboard()
+
+
+def clipboard_read_state() -> Tuple[Optional[str], bool]:
+    """一次打开剪贴板，同时取文本与“是否含富格式”。
+
+    取词前要同时知道这两件事；分两次调用就得抢两次剪贴板锁，
+    被别的程序占用时等待时间翻倍。
+    """
+    if not _open_clipboard():
+        return None, False
+    try:
+        text: Optional[str] = None
+        handle = GetClipboardData(CF_UNICODETEXT)
+        if handle:
+            ptr = _global_lock(handle)
+            if ptr:
+                try:
+                    text = ctypes.c_wchar_p(ptr).value
+                finally:
+                    _global_unlock(handle)
+        rich = any(fmt not in _SAFE_RESTORE_FORMATS for fmt in _enum_formats_locked())
+        return text, rich
     finally:
         CloseClipboard()
 
@@ -591,14 +602,6 @@ def clipboard_available() -> bool:
         CloseClipboard()
         return True
     return False
-
-
-def clipboard_has_rich_content() -> bool:
-    """剪贴板中含文本以外的格式（图片、文件、HTML 等）时返回 True。"""
-    formats = clipboard_formats()
-    if not formats:
-        return False
-    return any(fmt not in _SAFE_RESTORE_FORMATS for fmt in formats)
 
 
 # ----------------------------------------------------------------- 菜单与图标
@@ -703,6 +706,7 @@ class NativeWindow:
         return int(_register_window_message(name))
 
     def post(self, message: int, wparam: int = 0, lparam: int = 0) -> None:
+        """向本窗口投递一条消息（自检用来验证消息泵）。"""
         if self.hwnd:
             _post_message(self.hwnd, message, wparam, lparam)
 
@@ -805,12 +809,6 @@ class TrayIcon:
         data.szTip = self.tooltip[:127]
         _shell_notify_icon(NIM_MODIFY, byref(data))
 
-    def set_icon(self, icon_path: str) -> None:
-        self.update(icon_path=icon_path)
-
-    def set_tooltip(self, tooltip: str) -> None:
-        self.update(tooltip=tooltip)
-
     def show_balloon(self, title: str, text: str) -> None:
         """弹出气泡提示（V2 结构的 NIF_INFO）。"""
         data = self._data
@@ -835,7 +833,7 @@ class MouseHook:
 
     def __init__(
         self,
-        on_select: Callable[[int, int, str], None],
+        on_select: Callable[[int, int], None],
         min_drag_px: int = 4,
         max_drag_seconds: float = 3.0,
         is_ignored_window: Optional[Callable[[int], bool]] = None,
@@ -915,11 +913,11 @@ class MouseHook:
             return
         if time.monotonic() - start_time > self.max_drag_seconds:
             return
-        self._emit(x, y, "drag")
+        self._emit(x, y)
 
-    def _emit(self, x: int, y: int, kind: str) -> None:
+    def _emit(self, x: int, y: int) -> None:
         try:
-            self.on_select(x, y, kind)
+            self.on_select(x, y)
         except Exception:
             pass
 

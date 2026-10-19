@@ -169,7 +169,7 @@ def test_clipboard() -> None:
         check("读回文本", native.clipboard_get_text() == "Trans 自检 hello")
         check("序号变化", native.clipboard_sequence_number() > 0)
         check("格式枚举", native.CF_UNICODETEXT in native.clipboard_formats())
-        check("纯文本不算富内容", native.clipboard_has_rich_content() is False)
+        check("纯文本不算富内容", native.clipboard_read_state()[1] is False)
     finally:
         if backup:
             native.clipboard_set_text(backup)
@@ -198,10 +198,10 @@ def test_native_window_and_tray() -> None:
         tray = native.TrayIcon(hwnd, native.WM_APP + 1, "Trans 自检", os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.ico"))
         check("托盘图标注册", tray.add())
-        tray.set_tooltip("Trans 自检进行中")
+        tray.update(tooltip="Trans 自检进行中")
         tray.remove()
 
-        hook = native.MouseHook(on_select=lambda x, y, kind: None)
+        hook = native.MouseHook(on_select=lambda x, y: None)
         check("鼠标钩子安装", hook.start())
     finally:
         if hook is not None:
@@ -215,7 +215,7 @@ def test_mouse_detection() -> None:
     def make(require_ctrl: bool, ctrl: bool = False):
         events: list[str] = []
         hook = native.MouseHook(
-            on_select=lambda x, y, kind: events.append(kind),
+            on_select=lambda x, y: events.append("drag"),
             require_ctrl=require_ctrl,
             ctrl_check=lambda: ctrl,
         )
@@ -241,7 +241,7 @@ def test_mouse_detection() -> None:
     check("双击不触发（只认划选）", events == ["drag"], str(events))
 
     ignored = native.MouseHook(
-        on_select=lambda x, y, kind: events.append("own"),
+        on_select=lambda x, y: events.append("own"),
         is_ignored_window=lambda hwnd: True,
         require_ctrl=False,
     )

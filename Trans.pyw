@@ -92,7 +92,7 @@ def _check_previous_run() -> None:
 
 
 class App:
-    def __init__(self, show_settings_on_start: bool = False) -> None:
+    def __init__(self) -> None:
         self.config = Config.load()
         self._selections: "queue.Queue[Tuple[int, int]]" = queue.Queue()
         self._clicks: "queue.Queue[Tuple[int, int]]" = queue.Queue()
@@ -155,8 +155,6 @@ class App:
         if not self.config.get("ui", "hint_shown", False):
             self.root.after(800, self._show_first_run_hint)
 
-        if show_settings_on_start:
-            self.root.after(120, self.settings.show)
         self._start_watchdog()
         Config.log(f"{START_MARK} v{__version__} ===")
 
@@ -171,9 +169,7 @@ class App:
             pass
 
     def _install_tray(self) -> bool:
-        if self.tray.add():
-            return True
-        return False
+        return self.tray.add()
 
     # ------------------------------------------------------------ 稳定性监控
     def _mark_action(self, action: str) -> None:
@@ -189,12 +185,12 @@ class App:
         """主线程卡住超过 2 秒就记一条日志（鼠标变卡的根因通常就在这里）。"""
         while not self._stopping:
             time.sleep(0.5)
-            if getattr(self, "_menu_open", False):
+            if self._menu_open:
                 self._last_tick = time.time()  # 原生菜单是模态循环，不算卡死
                 continue
             stalled = time.time() - self._last_tick
             if stalled > 2.0:
-                held = time.time() - getattr(self, "_action_started", self._last_tick)
+                held = time.time() - self._action_started
                 Config.log(
                     f"WARN 主线程卡住 {stalled:.1f}s"
                     f"（最近动作：{self._last_action}，该动作已持续 {held:.1f}s）\n"
@@ -385,15 +381,15 @@ class App:
         self._log(f"配置已更新（启用取词翻译={enabled}）")
 
     # ------------------------------------------------------------ 取词
-    def _on_selection(self, x: int, y: int, kind: str = "drag") -> None:
+    def _on_selection(self, x: int, y: int) -> None:
         """鼠标钩子回调：只入队，不做耗时操作。"""
         if not self.config.get("trigger", "enabled", True):
             return
         self._log(f"检测到划选 ({x},{y})")
-        self._selections.put((x, y, kind))
+        self._selections.put((x, y))
 
     def _drain_selections(self) -> None:
-        latest: Optional[Tuple[int, int, str]] = None
+        latest: Optional[Tuple[int, int]] = None
         while True:
             try:
                 latest = self._selections.get_nowait()
@@ -401,14 +397,10 @@ class App:
                 break
         if latest is None:
             return
-        self._schedule_capture(latest)
+        self._schedule_capture(latest[0], latest[1])
 
-    def _schedule_capture(self, selection: Tuple[int, int, str]) -> None:
-        x, y, kind = selection
+    def _schedule_capture(self, x: int, y: int) -> None:
         delay = int(self.config.get("trigger", "copy_delay_ms", 130) or 0)
-        if kind == "click":
-            # 双击之后可能还有三击，多等一会儿再复制，避免取到半截选中内容
-            delay = max(delay, 260)
 
         def start() -> None:
             self._translate_current_selection(x, y)
@@ -467,10 +459,8 @@ class App:
     # ------------------------------------------------------------ 剪贴板快照
     def _snapshot_clipboard(self) -> Dict[str, Any]:
         """只能在 work 线程调用（读剪贴板可能等待别的程序释放）。"""
-        return {
-            "text": native.clipboard_get_text(),
-            "rich": native.clipboard_has_rich_content(),
-        }
+        text, rich = native.clipboard_read_state()
+        return {"text": text, "rich": rich}
 
     def _restore_clipboard(self, snapshot: Dict[str, Any]) -> None:
         """只能在 work 线程调用。"""
@@ -491,13 +481,12 @@ class App:
             text = text[:max_chars]
             truncated = True
 
-        detected, target, _rule, confident = pick_target(
-            text, self.config.rules, fallback="zh"
-        )
+        rules = self.config.rules
+        detected, target, _rule, confident = pick_target(text, rules, fallback="zh")
         # 本地判不出来的语种 + 规则表里确实有拉丁语系语种时，才把规则表交给模型路由
         routing = None
-        if not confident and needs_model_routing(self.config.rules):
-            routing = build_routing_instruction(self.config.rules, target)
+        if not confident and needs_model_routing(rules):
+            routing = build_routing_instruction(rules, target)
         routed = routing is not None
         model_config = dict(self.config.section("model"))
         if not (model_config.get("api_key") or "").strip():

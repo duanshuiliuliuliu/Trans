@@ -31,10 +31,10 @@ NAMES = {
 def main() -> int:
     seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
     native.enable_dpi_awareness()
-    print(f"安装鼠标钩子，{seconds:.0f} 秒内请用鼠标划选（按住左键拖动）或双击一段文字…")
+    print(f"安装鼠标钩子，{seconds:.0f} 秒内请用鼠标划选（按住左键拖动）一段文字…")
     print("（本脚本只监听、不做任何复制或翻译）")
 
-    stats = {"drag": 0, "click": 0, "injected": 0, "plain": 0}
+    stats = {"drag": 0, "injected": 0, "plain": 0}
 
     def on_raw(message: int, x: int, y: int, injected: bool) -> None:
         stats["injected" if injected else "plain"] += 1
@@ -42,9 +42,9 @@ def main() -> int:
             f"  {NAMES[message]} @ ({x},{y}) 注入标记={'是' if injected else '否'}"
         )
 
-    def on_select(x: int, y: int, kind: str) -> None:
-        stats[kind] = stats.get(kind, 0) + 1
-        print(f"  → 识别为{'双击选词' if kind == 'click' else '划选'}，结束位置 ({x},{y})")
+    def on_select(x: int, y: int) -> None:
+        stats["drag"] += 1
+        print(f"  → 识别为划选，结束位置 ({x},{y})")
 
     hook = native.MouseHook(on_select=on_select, on_raw=on_raw)
     if not hook.start():
@@ -65,12 +65,12 @@ def main() -> int:
         hook.stop()
 
     print()
-    print(f"共识别：划选 {stats['drag']} 次，双击选词 {stats['click']} 次")
+    print(f"共识别：划选 {stats['drag']} 次")
     print(f"鼠标消息：带注入标记 {stats['injected']} 条，普通 {stats['plain']} 条")
     if stats["plain"] == 0 and stats["injected"] > 0:
         print("说明：你的鼠标输入全部带注入标记（触摸板驱动、远程桌面或鼠标增强软件），")
         print("      旧版本程序会因此忽略它们；当前版本已不再过滤，可以正常取词。")
-    elif stats["drag"] + stats["click"] == 0:
+    elif stats["drag"] == 0:
         print("说明：没有识别到划选动作。若确实划选了文字，请把上面的输出发给我。")
     return 0
 

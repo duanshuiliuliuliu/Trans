@@ -11,7 +11,7 @@ from __future__ import annotations
 import ctypes
 import tkinter as tk
 from tkinter import font as tkfont
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 
 from . import native
 from .config import Config
@@ -50,8 +50,18 @@ def _round_corners(hwnd: int, preference: int = DWMWCP_ROUND) -> None:
         pass
 
 
-def _wrapped_line_count(text: str, font: tkfont.Font, max_px: int) -> int:
-    """按真实字形宽度估算折行行数（中英文混排也准）。"""
+def _wrapped_line_count(
+    text: str,
+    font: tkfont.Font,
+    max_px: int,
+    width_cache: Optional[Dict[str, float]] = None,
+) -> int:
+    """按真实字形宽度估算折行行数（中英文混排也准）。
+
+    逐字累加宽度，避免 "current + char" 那种每次都重新测量的写法。
+    font.measure 每次都是一次 Tcl 调用（约 0.1ms），所以传入 width_cache
+    按字符缓存测量结果：一段中文里不同字符只有几百个，长文本能省掉大半调用。
+    """
     if max_px <= 20 or not text:
         return 1
     total = 0
@@ -59,14 +69,21 @@ def _wrapped_line_count(text: str, font: tkfont.Font, max_px: int) -> int:
         if not paragraph or font.measure(paragraph) <= max_px:
             total += 1
             continue
+        width = 0.0
         lines = 1
-        current = ""
         for char in paragraph:
-            if current and font.measure(current + char) > max_px:
+            advance = None
+            if width_cache is not None:
+                advance = width_cache.get(char)
+            if advance is None:
+                advance = font.measure(char)
+                if width_cache is not None:
+                    width_cache[char] = advance
+            if width and width + advance > max_px:
                 lines += 1
-                current = char
+                width = advance
             else:
-                current += char
+                width += advance
         total += lines
     return total
 
@@ -93,6 +110,21 @@ class Popup:
         self._closing = False
         self._drag_offset = (0, 0)
         self._family = _pick_font_family()
+        self._fonts: dict = {}  # size -> (正文字体, 小号字体, 原文小号字体)
+        self._char_widths: dict = {}  # size -> {字符: 宽度}，避免重复调用 font.measure
+
+    def _fonts_for(self, size: int):
+        """按字号缓存字体对象：每次弹窗都新建 Font 会重复查询字体度量。"""
+        cached = self._fonts.get(size)
+        if cached is None:
+            small = max(8, size - 2)
+            cached = (
+                tkfont.Font(family=self._family, size=size),
+                tkfont.Font(family=self._family, size=small),
+                tkfont.Font(family=self._family, size=small),
+            )
+            self._fonts[size] = cached
+        return cached
 
     # --- 对外接口 ---------------------------------------------------
     @property
@@ -183,9 +215,7 @@ class Popup:
         pending = state == "pending"
         accent = ACCENT_ERROR if error else (ACCENT_PENDING if pending else ACCENT)
         size = max(9, int(self.config.get("ui", "font_size", 11) or 11))
-        body_font = tkfont.Font(family=self._family, size=size)
-        meta_font = tkfont.Font(family=self._family, size=max(8, size - 2))
-        source_font = tkfont.Font(family=self._family, size=max(8, size - 2))
+        body_font, meta_font, source_font = self._fonts_for(size)
 
         work_left, work_top, work_right, work_bottom = native.get_work_area()
         work_width = max(240, work_right - work_left)
@@ -264,10 +294,11 @@ class Popup:
             ).pack(fill="x", padx=(12, 12), pady=(8, 0))
 
         text_body = body.strip()
-        estimated_lines = _wrapped_line_count(text_body, body_font, text_px)
+        widths = self._char_widths.setdefault(size, {})
+        estimated_lines = _wrapped_line_count(text_body, body_font, text_px, widths)
         needs_scrollbar = estimated_lines > 14
         if needs_scrollbar:
-            estimated_lines = _wrapped_line_count(text_body, body_font, text_px - 16)
+            estimated_lines = _wrapped_line_count(text_body, body_font, text_px - 16, widths)
         visible_lines = max(2, min(14, estimated_lines))
 
         body_row = tk.Frame(content, bg=CARD)

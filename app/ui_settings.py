@@ -173,7 +173,6 @@ class SettingsWindow:
             values=[name for name, _desc in PRESET_MODELS],
         )
         self._row(model_tab, 2, "模型", model_box)
-        self.model_box = model_box
         ttk.Checkbutton(
             model_tab,
             text="翻译前先推理（质量略好，实测每次约慢 1 秒）",

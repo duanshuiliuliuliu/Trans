@@ -35,7 +35,6 @@ _SCRIPT_RANGES: Tuple[Tuple[int, int, str], ...] = (
 _CYRILLIC_MARKERS = (
     ("uk", "іїєґ"),
     ("sr", "ђћџ"),
-    ("bg", ""),  # 保加利亚语无独有字母，保持俄语兜底
 )
 
 # 阿拉伯字母内部再细分（波斯语特有字母）
@@ -62,7 +61,7 @@ _DETECTED_LABELS = {"latin": "拉丁文字", "unknown": "自动识别"}
 LATIN_SCRIPT_LANGUAGES = {
     "en", "de", "fr", "es", "it", "nl", "ca", "pt", "sv", "no", "da", "fi", "is",
     "pl", "cs", "sk", "hu", "ro", "lv", "lt", "et", "hr", "sl", "sr", "bg", "vi",
-    "tr", "id", "ms", "sq",
+    "tr", "id", "ms",
 }
 
 
