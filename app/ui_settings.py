@@ -279,6 +279,7 @@ class SettingsWindow:
         self.var_auto_close = tk.StringVar(value=str(ui.get("popup_auto_close", 8)))
         self.var_font_size = tk.StringVar(value=str(ui.get("font_size", 11)))
         self.var_show_source = tk.BooleanVar(value=bool(ui.get("show_source", True)))
+        self.var_dark_mode = tk.BooleanVar(value=bool(ui.get("dark_mode", False)))
 
         ttk.Checkbutton(
             general_tab,
@@ -297,7 +298,10 @@ class SettingsWindow:
         self._sync_mode_state()
 
         ttk.Checkbutton(general_tab, text="弹窗中显示原文", variable=self.var_show_source).grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(14, 4)
+            row=3, column=0, sticky="w", pady=(14, 4)
+        )
+        ttk.Checkbutton(general_tab, text="暗色模式（翻译弹窗）", variable=self.var_dark_mode).grid(
+            row=3, column=1, sticky="w", pady=(14, 4)
         )
         self._row(
             general_tab,
@@ -453,6 +457,7 @@ class SettingsWindow:
                 "popup_auto_close": max(0, self._to_int(self.var_auto_close.get(), 8)),
                 "font_size": max(8, self._to_int(self.var_font_size.get(), 11)),
                 "show_source": bool(self.var_show_source.get()),
+                "dark_mode": bool(self.var_dark_mode.get()),
             },
         }
 

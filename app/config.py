@@ -54,6 +54,7 @@ DEFAULTS: Dict[str, Any] = {
         "popup_auto_close": 8,
         "font_size": 11,
         "show_source": True,
+        "dark_mode": False,
         "hint_shown": False,
     },
     "debug": False,

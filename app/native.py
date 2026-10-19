@@ -94,6 +94,7 @@ VK_CONTROL = 0x11
 VK_C = 0x43
 
 SPI_GETWORKAREA = 0x0030
+MONITOR_DEFAULTTONEAREST = 0x0002
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 LOGPIXELSX = 88
 
@@ -125,6 +126,15 @@ class MSG(Structure):
         ("time", wt.DWORD),
         ("pt", POINT),
         ("lPrivate", wt.DWORD),
+    ]
+
+
+class MONITORINFO(Structure):
+    _fields_ = [
+        ("cbSize", wt.DWORD),
+        ("rcMonitor", RECT),
+        ("rcWork", RECT),
+        ("dwFlags", wt.DWORD),
     ]
 
 
@@ -260,6 +270,8 @@ _SIG = {
     "CallNextHookEx": (LRESULT, [HANDLE, ctypes.c_int, wt.WPARAM, wt.LPARAM]),
     "GetCursorPos": (wt.BOOL, [POINTER(POINT)]),
     "WindowFromPoint": (HWND, [POINT]),
+    "MonitorFromPoint": (HANDLE, [POINT, wt.DWORD]),
+    "GetMonitorInfoW": (wt.BOOL, [HANDLE, POINTER(MONITORINFO)]),
     "GetWindowThreadProcessId": (wt.DWORD, [HWND, POINTER(wt.DWORD)]),
     "SetForegroundWindow": (wt.BOOL, [HWND]),
     "GetSystemMetrics": (ctypes.c_int, [ctypes.c_int]),
@@ -357,6 +369,8 @@ _unhook_windows_hook = _bind("UnhookWindowsHookEx", user32)
 _call_next_hook = _bind("CallNextHookEx", user32)
 _get_cursor_pos = _bind("GetCursorPos", user32)
 _window_from_point = _bind("WindowFromPoint", user32)
+_monitor_from_point = _bind("MonitorFromPoint", user32)
+_get_monitor_info = _bind("GetMonitorInfoW", user32)
 _get_window_thread_process_id = _bind("GetWindowThreadProcessId", user32)
 _set_foreground_window = _bind("SetForegroundWindow", user32)
 _get_system_metrics = _bind("GetSystemMetrics", user32)
@@ -437,7 +451,28 @@ def get_cursor_pos() -> Tuple[int, int]:
     return int(pt.x), int(pt.y)
 
 
-def get_work_area() -> Tuple[int, int, int, int]:
+def get_work_area(
+    x: Optional[int] = None, y: Optional[int] = None
+) -> Tuple[int, int, int, int]:
+    """返回工作区 (left, top, right, bottom)。
+
+    SPI_GETWORKAREA 只返回主屏工作区，多显示器下会在副屏上把弹窗夹回主屏；
+    给出坐标时改用 MonitorFromPoint + GetMonitorInfo 取该点所在显示器的工作区。
+    """
+    if x is not None and y is not None:
+        monitor = _monitor_from_point(POINT(int(x), int(y)), MONITOR_DEFAULTTONEAREST)
+        if monitor:
+            info = MONITORINFO()
+            info.cbSize = sizeof(MONITORINFO)
+            if _get_monitor_info(monitor, byref(info)):
+                rect = info.rcWork
+                if rect.right > rect.left and rect.bottom > rect.top:
+                    return (
+                        int(rect.left),
+                        int(rect.top),
+                        int(rect.right),
+                        int(rect.bottom),
+                    )
     rect = RECT()
     _system_parameters_info(SPI_GETWORKAREA, 0, byref(rect), 0)
     if rect.right <= rect.left or rect.bottom <= rect.top:

@@ -16,17 +16,38 @@ from typing import Callable, Dict, Optional
 from . import native
 from .config import Config
 
-# 配色
-CARD = "#FFFFFF"
-HAIRLINE = "#EDF0F4"
-TEXT_MAIN = "#1F2430"
-TEXT_MUTED = "#98A1B0"
-TEXT_SOURCE = "#9AA3B2"
-ACCENT = "#2F6FEB"
-ACCENT_PENDING = "#9BB4E8"
-ACCENT_ERROR = "#D64545"
-TEXT_ERROR = "#A32B2B"
-HOVER_BG = "#F1F3F6"
+# 配色：浅色 / 暗色两套，字段一一对应
+LIGHT_THEME = {
+    "card": "#FFFFFF",
+    "hairline": "#EDF0F4",
+    "text_main": "#1F2430",
+    "text_muted": "#98A1B0",
+    "text_source": "#9AA3B2",
+    "accent": "#2F6FEB",
+    "accent_pending": "#9BB4E8",
+    "accent_error": "#D64545",
+    "text_error": "#A32B2B",
+    "hover_bg": "#F1F3F6",
+    "select_bg": "#CFE0FF",
+    "scroll_bg": "#E3E6EA",
+    "scroll_trough": "#F4F6F8",
+}
+
+DARK_THEME = {
+    "card": "#22262E",
+    "hairline": "#31363F",
+    "text_main": "#E7EAF0",
+    "text_muted": "#9AA3B2",
+    "text_source": "#98A1B0",
+    "accent": "#5B8DEF",
+    "accent_pending": "#3D5C93",
+    "accent_error": "#D95656",
+    "text_error": "#F2A2A2",
+    "hover_bg": "#2C323B",
+    "select_bg": "#3C5A8C",
+    "scroll_bg": "#3A404A",
+    "scroll_trough": "#272C34",
+}
 
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_ROUND = 2
@@ -213,11 +234,17 @@ class Popup:
 
         error = state == "error"
         pending = state == "pending"
-        accent = ACCENT_ERROR if error else (ACCENT_PENDING if pending else ACCENT)
+        theme = DARK_THEME if self.config.get("ui", "dark_mode", False) else LIGHT_THEME
+        accent = (
+            theme["accent_error"]
+            if error
+            else (theme["accent_pending"] if pending else theme["accent"])
+        )
         size = max(9, int(self.config.get("ui", "font_size", 11) or 11))
         body_font, meta_font, source_font = self._fonts_for(size)
 
-        work_left, work_top, work_right, work_bottom = native.get_work_area()
+        # 按锚点（选中位置）所在显示器取工作区，多显示器下弹窗才会出现在副屏
+        work_left, work_top, work_right, work_bottom = native.get_work_area(x, y)
         work_width = max(240, work_right - work_left)
         px_width = int(min(max(360, work_width * 0.36), 620))
         text_px = px_width - 22  # 正文区左右内边距
@@ -226,25 +253,25 @@ class Popup:
         window.withdraw()
         window.overrideredirect(True)
         window.attributes("-topmost", True)
-        window.configure(bg=CARD)
+        window.configure(bg=theme["card"])
 
-        card = tk.Frame(window, bg=CARD)
+        card = tk.Frame(window, bg=theme["card"])
         card.pack(fill="both", expand=True)
 
         # 左侧竖条：整卡高度的强调色
         tk.Frame(card, bg=accent, width=3).pack(side="left", fill="y")
 
-        content = tk.Frame(card, bg=CARD)
+        content = tk.Frame(card, bg=theme["card"])
         content.pack(side="left", fill="both", expand=True)
 
-        header = tk.Frame(content, bg=CARD)
+        header = tk.Frame(content, bg=theme["card"])
         header.pack(fill="x", padx=(12, 8), pady=(9, 7))
         title = meta or ("翻译失败" if error else "译文")
         title_label = tk.Label(
             header,
             text=title,
-            bg=CARD,
-            fg=TEXT_ERROR if error else TEXT_MUTED,
+            bg=theme["card"],
+            fg=theme["text_error"] if error else theme["text_muted"],
             font=meta_font,
             anchor="w",
             justify="left",
@@ -255,8 +282,8 @@ class Popup:
             button = tk.Label(
                 header,
                 text=text,
-                bg=CARD,
-                fg=TEXT_MUTED,
+                bg=theme["card"],
+                fg=theme["text_muted"],
                 font=meta_font,
                 padx=7,
                 pady=1,
@@ -265,9 +292,13 @@ class Popup:
             button.pack(side="right", padx=(4, 0))
             button.bind("<Button-1>", command)
             button.bind(
-                "<Enter>", lambda _e: button.configure(bg=HOVER_BG, fg=TEXT_MAIN)
+                "<Enter>",
+                lambda _e: button.configure(bg=theme["hover_bg"], fg=theme["text_main"]),
             )
-            button.bind("<Leave>", lambda _e: button.configure(bg=CARD, fg=TEXT_MUTED))
+            button.bind(
+                "<Leave>",
+                lambda _e: button.configure(bg=theme["card"], fg=theme["text_muted"]),
+            )
             return button
 
         make_button("✕", lambda _e: self.dismiss())
@@ -276,7 +307,7 @@ class Popup:
             make_button("复制", lambda _e: None) if state == "result" else None
         )
 
-        tk.Frame(content, bg=HAIRLINE, height=1).pack(fill="x")
+        tk.Frame(content, bg=theme["hairline"], height=1).pack(fill="x")
 
         if source.strip():
             excerpt = source.strip().replace("\r", "")
@@ -285,8 +316,8 @@ class Popup:
             tk.Label(
                 content,
                 text=excerpt,
-                bg=CARD,
-                fg=TEXT_SOURCE,
+                bg=theme["card"],
+                fg=theme["text_source"],
                 font=source_font,
                 justify="left",
                 anchor="w",
@@ -301,14 +332,14 @@ class Popup:
             estimated_lines = _wrapped_line_count(text_body, body_font, text_px - 16, widths)
         visible_lines = max(2, min(14, estimated_lines))
 
-        body_row = tk.Frame(content, bg=CARD)
+        body_row = tk.Frame(content, bg=theme["card"])
         body_row.pack(fill="both", expand=True, padx=(12, 10), pady=(7, 10))
         text_area = tk.Text(
             body_row,
             wrap="word",
             font=body_font,
-            bg=CARD,
-            fg=TEXT_ERROR if error else TEXT_MAIN,
+            bg=theme["card"],
+            fg=theme["text_error"] if error else theme["text_main"],
             relief="flat",
             highlightthickness=0,
             borderwidth=0,
@@ -320,12 +351,23 @@ class Popup:
             spacing3=4,
             cursor="arrow",
             insertwidth=0,
+            selectbackground=theme["select_bg"],
+            selectforeground=theme["text_main"],
         )
         text_area.insert("1.0", text_body)
         text_area.configure(state="disabled")
         text_area.pack(side="left", fill="both", expand=True)
         if needs_scrollbar:
-            scrollbar = tk.Scrollbar(body_row, command=text_area.yview, width=8)
+            scrollbar = tk.Scrollbar(
+                body_row,
+                command=text_area.yview,
+                width=8,
+                bg=theme["scroll_bg"],
+                troughcolor=theme["scroll_trough"],
+                activebackground=theme["text_muted"],
+                borderwidth=0,
+                highlightthickness=0,
+            )
             scrollbar.pack(side="right", fill="y", padx=(6, 0))
             text_area.configure(yscrollcommand=scrollbar.set)
 
@@ -334,10 +376,13 @@ class Popup:
                 def finished(ok: bool) -> None:
                     if not ok or not self.visible:
                         return
-                    copy_button.configure(text="已复制", fg=ACCENT)
+                    copy_button.configure(text="已复制", fg=theme["accent"])
                     try:
                         window.after(
-                            1200, lambda: copy_button.configure(text="复制", fg=TEXT_MUTED)
+                            1200,
+                            lambda: copy_button.configure(
+                                text="复制", fg=theme["text_muted"]
+                            ),
                         )
                     except tk.TclError:
                         pass

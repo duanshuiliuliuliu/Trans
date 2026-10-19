@@ -141,6 +141,7 @@ def test_config() -> None:
         config = Config.load(path)
         check("默认需要 Ctrl 划选", config.get("trigger", "require_ctrl") is True)
         check("配置里不再有快捷键项", "hotkey" not in config.section("trigger"))
+        check("暗色模式默认关闭", config.get("ui", "dark_mode") is False)
         config.set("model", "api_key", "sk-test-123456")
         config.set("model", "model", "deepseek-chat")
         config.replace_rules([{"source": "zh", "target": "ja"}])
@@ -179,6 +180,10 @@ def test_process_and_screen() -> None:
     print("屏幕与 DPI")
     left, top, right, bottom = native.get_work_area()
     check("工作区有效", right > left and bottom > top, f"{left},{top},{right},{bottom}")
+    at_point = native.get_work_area(left + 10, top + 10)
+    check("按坐标取工作区", at_point == (left, top, right, bottom), str(at_point))
+    off_screen = native.get_work_area(-10000, -10000)
+    check("屏幕外坐标回退到最近显示器", off_screen[2] > off_screen[0], str(off_screen))
     check("DPI 有值", native.system_dpi() >= 96, str(native.system_dpi()))
 
 
